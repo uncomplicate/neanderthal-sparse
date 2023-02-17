@@ -9,8 +9,8 @@
 (ns uncomplicate.neanderthal.internal.cpp.mkl.core
   (:require [uncomplicate.commons
              [core :refer [with-release let-release Info info Releaseable release]]
-             [utils :refer [dragan-says-ex direct-buffer]]]
-            [uncomplicate.clojure-cpp :refer [pointer-seq]]
+             [utils :refer [dragan-says-ex]]]
+            [uncomplicate.clojure-cpp :as cpp]
             [uncomplicate.neanderthal.internal.cpp.mkl.constants :refer :all])
   (:import [org.bytedeco.javacpp Pointer]
            [org.bytedeco.mkl.global mkl_rt mkl_rt$MKLVersion]))
