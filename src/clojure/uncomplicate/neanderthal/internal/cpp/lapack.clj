@@ -19,6 +19,7 @@
         err#
         (throw (ex-info "LAPACK error." {:error-code err# :bad-argument (- err#)})))))
 
+;; TODO remove
 (defmacro vctr-laset [method ptr alpha x]
   `(do
      (with-lapack-check
