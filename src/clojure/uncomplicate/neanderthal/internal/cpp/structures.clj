@@ -19,7 +19,7 @@
                                      long-pointer int-pointer short-pointer byte-pointer
                                      element-count]]
    [uncomplicate.neanderthal
-    [core :refer [transfer! copy! subvector vctr ge]]
+    [core :refer [transfer! copy! dim subvector vctr ge]]
     [real :refer [entry entry!]]
     [math :refer [ceil]]]
    [uncomplicate.neanderthal.internal
@@ -30,14 +30,15 @@
            [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
             IFn$LDD IFn$LLDD IFn$LLL]
            org.bytedeco.mkl.global.mkl_rt
-           [org.bytedeco.javacpp FloatPointer DoublePointer LongPointer IntPointer ShortPointer BytePointer]
+           [org.bytedeco.javacpp FloatPointer DoublePointer LongPointer IntPointer ShortPointer
+            BytePointer]
            [uncomplicate.neanderthal.internal.api
-            VectorSpace Vector RealVector Matrix IntegerVector DataAccessor RealChangeable IntegerChangeable
-            RealNativeMatrix RealNativeVector IntegerNativeVector DenseStorage FullStorage
-            LayoutNavigator RealLayoutNavigator Region MatrixImplementation GEMatrix UploMatrix
-            BandedMatrix PackedMatrix DiagonalMatrix]))
+            VectorSpace Vector RealVector Matrix IntegerVector DataAccessor RealChangeable
+            IntegerChangeable RealNativeMatrix RealNativeVector IntegerNativeVector DenseStorage
+            FullStorage LayoutNavigator RealLayoutNavigator Region MatrixImplementation GEMatrix
+            UploMatrix BandedMatrix PackedMatrix DiagonalMatrix]))
 
-(declare real-block-vector)
+(declare real-block-vector integer-block-vector)
 
 ;; ================ from buffer-block ====================================
 (defn ^:private vector-seq [^Vector vector ^long i]
@@ -45,6 +46,37 @@
    (if (< -1 i (.dim vector))
      (cons (.boxedEntry vector i) (vector-seq vector (inc i)))
      '())))
+
+(defmacro ^:private transfer-vector-vector [source destination]
+  `(do
+     (if (compatible? ~source ~destination)
+       (when-not (identical? ~source ~destination)
+         (let [n# (min (.dim ~source) (.dim ~destination))]
+           (subcopy (engine ~source) ~source ~destination 0 n# 0)))
+       (dotimes [i# (min (.dim ~source) (.dim ~destination))]
+         (.set ~destination i# (.entry ~source i#))))
+     ~destination))
+
+(defmacro ^:private transfer-vector-array [source destination]
+  `(let [n# (min (.dim ~source) (alength ~destination))]
+     (dotimes [i# n#]
+       (aset ~destination i# (.entry ~source i#)))
+     ~destination))
+
+(defmacro ^:private transfer-array-vector [source destination]
+  `(let [n# (min (alength ~source) (.dim ~destination))]
+     (dotimes [i# n#]
+       (.set ~destination i# (aget ~source i#)))
+     ~destination))
+
+(defmacro ^:private transfer-seq-vector [source destination]
+  `(let [n# (.dim ~destination)]
+     (loop [i# 0 src# (seq ~source)]
+       (when (and src# (< i# n#))
+         (.set ~destination i# (first src#))
+         (recur (inc i#) (next src#))))
+     ~destination))
+
 ;; =======================================================================
 
 ;; ================ Pointer data accessors  ====================================
@@ -105,37 +137,187 @@
 
 ;; =======================================================================
 
+(defmacro extend-block-vector [name block-vector]
+  `(extend-type ~name
+     Releaseable
+     (release [this#]
+       (if 'master (release (.-buf-ptr this#)) true))
+     Container
+     (raw
+       ([this#]
+        (~block-vector (.-fact this#) (.-n this#)))
+       ([this# fact#]
+        (create-vector (factory fact#) (.-n this#) false)))
+     (zero
+       ([this#]
+        (~block-vector (.-fact this#) (.-n this#)))
+       ([this# fact#]
+        (create-vector (factory fact#) (.-n this#) true)))
+     (host [this#]
+       (let-release [res# (raw this#)]
+         (copy (.-eng this#) this# res#)))
+     (native [this#]
+       this#)
+     Viewable
+     (view [this#]
+       (~block-vector (.-fact this#) false (.-buf-ptr this#) (.-n this#) (.-ofst this#) (.-strd this#)))
+     DenseContainer
+     (view-vctr
+       ([this#]
+        this#)
+       ([this# stride-mult#]
+        (~block-vector (.-fact this#) false (.-buf-ptr this#)
+         (ceil (/ (.-n this#) (long stride-mult#))) (.-ofst this#) (* (long stride-mult#) (.-strd this#)))))
+     MemoryContext
+     (compatible? [this# y#]
+       (compatible? (.-da this#) y#))
+     (fits? [this# y#]
+       (= (.-n this#) (dim y#)))
+     (device [_#]
+       :cpu)
+     EngineProvider
+     (engine [this#]
+       (.-eng this#))
+     FactoryProvider
+     (factory [this#]
+       (.-fact this#))
+     (native-factory [this#]
+       (native-factory (.-fact this#)))
+     (index-factory [this#]
+       (index-factory (.-fact this#)))
+     DataAccessorProvider
+     (data-accessor [this#]
+       (.-da this#))
+     Monoid
+     (id [this#]
+       (~block-vector (.-fact this#) 0))
+     Applicative
+     (pure [this# v#]
+       (let-release [res# (~block-vector (.-fact this#) 1)]
+         (uncomplicate.neanderthal.core/entry! res# 0 v#)))
+     (pure [this# v# vs#]
+       (vctr (.-fact this#) (cons v# vs#)))))
 
-(deftype RealBlockVector [fact ^DataAccessor da eng master buf-ptr
-                          ^long n ^long ofst ^long strd]
-  Releaseable
-  (release [_]
-    (if master (release buf-ptr) true))
+;; ============ Integer Vector ====================================================
+
+(deftype IntegerBlockVector [fact ^IntegerAccessor da eng master buf-ptr
+                             ^long n ^long ofst ^long strd]
+  ;; TODO Object Info
   Seqable
   (seq [x]
     (vector-seq x 0))
-  Container
-  (raw [_]
-    (real-block-vector fact n))
-  (raw [_ fact]
-    (create-vector (factory fact) n false))
-  (zero [_]
-    (real-block-vector fact n))
-  (zero [_ fact]
-    (create-vector (factory fact) n true))
-  (host [x]
-    (let-release [res (raw x)]
-      (copy eng x res)))
-  (native [x]
+  IFn$LLL
+  (invokePrim [x i v]
+    (.set x i v))
+  IFn$LL
+  (invokePrim [x i]
+    (.entry x i))
+  IFn$L
+  (invokePrim [x]
+    n)
+  IFn
+  (invoke [x i v]
+    (.set x i v))
+  (invoke [x i]
+    (.entry x i))
+  (invoke [x]
+    n)
+  IntegerChangeable
+  (set [x val]
+    (set-all eng val x)
     x)
-  Viewable
-  (view [x]
-    (real-block-vector fact false buf-ptr n ofst strd))
-  DenseContainer
-  (view-vctr [x]
+  (set [x i val]
+    (.set da buf-ptr (+ ofst (* strd i)) val)
     x)
-  (view-vctr [_ stride-mult]
-    (real-block-vector fact false buf-ptr (ceil (/ n (long stride-mult))) ofst (* (long stride-mult) strd)))
+  (setBoxed [x val]
+    (.set x val))
+  (setBoxed [x i val]
+    (.set x i val))
+  (alter [x f]
+    (if (instance? IFn$LL f)
+      (dotimes [i n]
+        (.set x i (.invokePrim ^IFn$LL f (.entry x i))))
+      (dotimes [i n]
+        (.set x i (.invokePrim ^IFn$LLL f i (.entry x i)))))
+    x)
+  (alter [x i f]
+    (.set x i (.invokePrim ^IFn$LL f (.entry x i))))
+  IntegerNativeVector
+  (buffer [_]
+    buf-ptr)
+  (offset [_]
+    ofst)
+  (stride [_]
+    strd)
+  (isContiguous [_]
+    (or (= 1 strd) (= 0 strd)))
+  (dim [_]
+    n)
+  (entry [_ i]
+    (.get da buf-ptr (+ ofst (* strd i))))
+  (boxedEntry [x i]
+    (.entry x i))
+  (subvector [_ k l]
+    (integer-block-vector fact false buf-ptr l (+ ofst (* k strd)) strd)))
+
+(extend-block-vector IntegerBlockVector integer-block-vector)
+
+(defn integer-block-vector
+  ([fact master buf-ptr n ofst strd]
+   (let [da (data-accessor fact)]
+     (if (and (<= 0 n (.count da buf-ptr)))
+       (->IntegerBlockVector fact da (vector-engine fact) master buf-ptr n ofst strd)
+       (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
+  ([fact n]
+   (let-release [buf-ptr (.createDataSource (data-accessor fact) n)]
+     (integer-block-vector fact true buf-ptr n 0 1))))
+
+
+(defmethod print-method IntegerBlockVector
+  [^Vector x ^java.io.Writer w]
+  (.write w (format "%s%s" (str x) (pr-str (take 100 (seq x))))))
+
+(defmethod transfer! [IntegerBlockVector IntegerBlockVector]
+  [^IntegerBlockVector source ^IntegerBlockVector destination]
+  (transfer-vector-vector source destination))
+
+(defmethod transfer! [clojure.lang.Sequential IntegerBlockVector]
+  [source ^IntegerBlockVector destination]
+  (transfer-seq-vector source destination))
+
+(defmethod transfer! [(Class/forName "[D") IntegerBlockVector]
+  [^doubles source ^IntegerBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [(Class/forName "[F") IntegerBlockVector]
+  [^floats source ^IntegerBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [(Class/forName "[J") IntegerBlockVector]
+  [^longs source ^IntegerBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [(Class/forName "[I") IntegerBlockVector]
+  [^ints source ^IntegerBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [IntegerBlockVector (Class/forName "[J")]
+  [^IntegerBlockVector source ^longs destination]
+  (transfer-vector-array source destination))
+
+(defmethod transfer! [IntegerBlockVector (Class/forName "[I")]
+  [^IntegerBlockVector source ^ints destination]
+  (transfer-vector-array source destination))
+
+;; ============ Real Vector ====================================================
+
+(deftype RealBlockVector [fact ^RealAccessor da eng master buf-ptr
+                          ^long n ^long ofst ^long strd]
+  ;; TODO Object Info
+  Seqable
+  (seq [x]
+    (vector-seq x 0))
+  ;; TODO
   ;; (view-ge [_]
   ;;   (real-ge-matrix fact false buf n 1 ofst (layout-navigator true) (full-storage true n 1) (ge-region n 1)))
   ;; (view-ge [x stride-mult]
@@ -146,32 +328,12 @@
   ;;   (view-tr (view-ge x) uplo diag))
   ;; (view-sy [x uplo]
   ;;   (view-sy (view-ge x) uplo))
-  MemoryContext
-  (compatible? [_ y]
-    (compatible? da y))
-  (fits? [_ y]
-    (= n (.dim ^VectorSpace y)))
-  (device [_]
-    :cpu)
-  EngineProvider
-  (engine [_]
-    eng)
-  FactoryProvider
-  (factory [_]
-    fact)
-  (native-factory [_]
-    (native-factory fact))
-  (index-factory [_]
-    (index-factory fact))
-  DataAccessorProvider
-  (data-accessor [_]
-    da)
   IFn$LDD
   (invokePrim [x i v]
     (.set x i v))
   IFn$LD
   (invokePrim [x i]
-    (entry x i))
+    (.entry x i))
   IFn$L
   (invokePrim [x]
     n)
@@ -179,7 +341,7 @@
   (invoke [x i v]
     (.set x i v))
   (invoke [x i]
-    (entry x i))
+    (.entry x i))
   (invoke [x]
     n)
   RealChangeable
@@ -190,7 +352,7 @@
         (.set x i val)))
     x)
   (set [x i val]
-    (.set ^RealAccessor da buf-ptr (+ ofst (* strd i)) val)
+    (.set da buf-ptr (+ ofst (* strd i)) val)
     x)
   (setBoxed [x val]
     (.set x val))
@@ -217,20 +379,13 @@
   (dim [_]
     n)
   (entry [_ i]
-    (.get ^RealAccessor da buf-ptr (+ ofst (* strd i))))
+    (.get da buf-ptr (+ ofst (* strd i))))
   (boxedEntry [x i]
     (.entry x i))
   (subvector [_ k l]
-    (real-block-vector fact false buf-ptr l (+ ofst (* k strd)) strd))
-  Monoid
-  (id [x]
-    (real-block-vector fact 0))
-  Applicative
-  (pure [_ v]
-    (let-release [res (real-block-vector fact 1)]
-      (.set ^RealChangeable res 0 v)))
-  (pure [_ v vs]
-    (vctr fact (cons v vs))))
+    (real-block-vector fact false buf-ptr l (+ ofst (* k strd)) strd)))
+
+(extend-block-vector RealBlockVector real-block-vector)
 
 (defn real-block-vector
   ([fact master buf-ptr n ofst strd]
@@ -240,5 +395,48 @@
        (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
   ([fact n]
    (let-release [buf-ptr (.createDataSource (data-accessor fact) n)]
-     (real-block-vector
-      fact true buf-ptr n 0 1))))
+     (real-block-vector fact true buf-ptr n 0 1))))
+
+(defmethod print-method RealBlockVector [^Vector x ^java.io.Writer w]
+  (.write w (str x))
+  (print-vector w x))
+
+(defmethod transfer! [RealBlockVector RealBlockVector]
+  [^RealBlockVector source ^RealBlockVector destination]
+  (transfer-vector-vector source destination))
+
+(defmethod transfer! [IntegerBlockVector RealBlockVector]
+  [^IntegerBlockVector source ^RealBlockVector destination]
+  (transfer-vector-vector source destination))
+
+(defmethod transfer! [RealBlockVector IntegerBlockVector]
+  [^RealBlockVector source ^IntegerBlockVector destination]
+  (transfer-vector-vector source destination))
+
+(defmethod transfer! [clojure.lang.Sequential RealBlockVector]
+  [source ^RealBlockVector destination]
+  (transfer-seq-vector source destination))
+
+(defmethod transfer! [(Class/forName "[D") RealBlockVector]
+  [^doubles source ^RealBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [(Class/forName "[F") RealBlockVector]
+  [^floats source ^RealBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [(Class/forName "[J") RealBlockVector]
+  [^longs source ^RealBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [(Class/forName "[I") RealBlockVector]
+  [^ints source ^RealBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [RealBlockVector (Class/forName "[D")]
+  [^RealBlockVector source ^doubles destination]
+  (transfer-vector-array source destination))
+
+(defmethod transfer! [RealBlockVector (Class/forName "[F")]
+  [^RealBlockVector source ^floats destination]
+  (transfer-vector-array source destination))

@@ -1,3 +1,11 @@
+;;   Copyright (c) Dragan Djuric. All rights reserved.
+;;   The use and distribution terms for this software are covered by the
+;;   Eclipse Public License 1.0 (http://opensource.org/licenses/eclipse-1.0.php) or later
+;;   which can be found in the file LICENSE at the root of this distribution.
+;;   By using this software in any fashion, you are agreeing to be bound by
+;;   the terms of this license.
+;;   You must not remove this notice, or any other, from this software.
+
 (ns uncomplicate.neanderthal.internal.cpp.mkl.factory
   (:require [uncomplicate.commons
              [core :refer [with-release let-release info Releaseable release]]
@@ -15,7 +23,7 @@
             [uncomplicate.neanderthal.internal.cpp
              [structures :refer :all]
              [lapack :refer :all]
-             [blas :refer [float-ptr double-ptr vector-imax vector-imin]]]
+             [blas :refer [float-ptr double-ptr coerce-double-ptr coerce-float-ptr vector-imax vector-imin]]]
             [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc!]]
             [uncomplicate.neanderthal.internal.host.mkl
              :refer [sigmoid-over-tanh vector-ramp vector-relu vector-elu]])
@@ -47,6 +55,77 @@
    (symbol (format "%s%s%s" prefix type name)))
   ([type name]
    (math "v" type name)))
+
+;; ================= Integer Vector Engines =====================================
+
+(def ^{:no-doc true :const true} INTEGER_UNSUPPORTED_MSG
+  "Integer BLAS operations are not supported. Please transform data to float or double.")
+
+(def ^{:no-doc true :const true} SHORT_UNSUPPORTED_MSG
+  "BLAS operation on short vectors are supported only on dimensions divisible by 2 (short) or 4 (byte).")
+
+(defmacro integer-vector-blas* [name t ptr blas]
+  `(extend-type ~name
+     Blas
+     (swap [this# x# y#]
+       (. ~blas ~(cblas t 'swap) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
+       x#)
+     (copy [this# x# y#]
+       (. ~blas ~(cblas t 'copy) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
+       y#)
+     (dot [this# x# y#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (nrm1 [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (nrm2 [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (nrmi [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (asum [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (iamax [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (iamin [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (rot [this# x# y# c# s#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (rotg [this# abcs#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (rotm [this# x# y# param#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (rotmg [this# d1d2xy# param#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (scal [this# alpha# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (axpy [this# alpha# x# y#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     Lapack
+     (srt [this# x# increasing#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))))
+
+(defmacro integer-vector-blas-plus* [name t cast ptr blas lapack]
+  `(extend-type ~name
+     BlasPlus
+     (amax [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (subcopy [this# x# y# kx# lx# ky#]
+       (. ~blas ~(cblas t 'copy) (int lx#) (~ptr x# kx#) (stride x#) (~ptr y# ky#) (stride y#))
+       y#)
+     (sum [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (imax [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (imin [this# x#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (set-all [this# alpha# x#]
+       (with-lapack-check
+         (. ~lapack ~(lapacke t 'laset) (int ~(:row blas-layout)) ~(byte (int \g)) (dim x#) 1
+            (~cast alpha#) (~cast alpha#) (~ptr x#) (stride x#)))
+       x#)
+     (axpby [this# alpha# x# beta# y#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))))
+
+;; ================= Real Vector Engines ========================================
 
 (defmacro real-vector-blas* [name t ptr cast blas lapack blas-layout ones]
   `(extend-type ~name
@@ -323,6 +402,14 @@
     (with-rng-check x
       (double-gaussian (or rng-stream default-rng-stream) mu sigma x))))
 
+(deftype LongVectorEngine [])
+(integer-vector-blas* LongVectorEngine "d" coerce-double-ptr mkl_rt)
+(integer-vector-blas-plus* LongVectorEngine "d" double coerce-double-ptr mkl_rt mkl_rt)
+
+(deftype IntVectorEngine [])
+(integer-vector-blas* IntVectorEngine "s" coerce-float-ptr mkl_rt)
+(integer-vector-blas-plus* IntVectorEngine "s" float coerce-float-ptr mkl_rt mkl_rt)
+
 (deftype MKLRealFactory [index-fact ^DataAccessor da
                          vector-eng]
   DataAccessorProvider
@@ -351,8 +438,39 @@
     vector-eng)
   )
 
+(deftype MKLIntegerFactory [index-fact ^DataAccessor da vector-eng]
+  DataAccessorProvider
+  (data-accessor [_]
+    da)
+  FactoryProvider
+  (factory [this]
+    this)
+  (native-factory [this]
+    this)
+  (index-factory [this]
+    @index-fact)
+  MemoryContext
+  (compatible? [_ o]
+    (compatible? da o))
+  RngStreamFactory
+  (create-rng-state [_ seed]
+    (create-stream-ars5 seed))
+  Factory
+  (create-vector [this n init]
+    (let-release [res (integer-block-vector this n)]
+      (when init
+        (.initialize da (.buffer ^Block res)))
+      res))
+  (vector-engine [_]
+    vector-eng))
+
 (def float-accessor (->FloatPointerAccessor malloc!))
 (def double-accessor (->DoublePointerAccessor malloc!))
+(def int-accessor (->IntPointerAccessor malloc!))
+(def long-accessor (->LongPointerAccessor malloc!))
+
+(def mkl-int (->MKLIntegerFactory mkl-int int-accessor (->IntVectorEngine)))
+(def mkl-long (->MKLIntegerFactory mkl-long long-accessor (->LongVectorEngine)))
 
 (def mkl-float
   (->MKLRealFactory mkl-int float-accessor
