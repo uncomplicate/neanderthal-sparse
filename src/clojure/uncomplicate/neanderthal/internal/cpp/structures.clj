@@ -106,8 +106,8 @@
 ;; =======================================================================
 
 
-(deftype RealNativeCppVector [fact ^DataAccessor da eng master buf-ptr
-                              ^long n ^long ofst ^long strd]
+(deftype RealBlockVector [fact ^DataAccessor da eng master buf-ptr
+                          ^long n ^long ofst ^long strd]
   Releaseable
   (release [_]
     (if master (release buf-ptr) true))
@@ -236,7 +236,7 @@
   ([fact master buf-ptr n ofst strd]
    (let [da (data-accessor fact)]
      (if (and (<= 0 n (.count da buf-ptr)))
-       (->RealNativeCppVector fact da (vector-engine fact) master buf-ptr n ofst strd)
+       (->RealBlockVector fact da (vector-engine fact) master buf-ptr n ofst strd)
        (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
   ([fact n]
    (let-release [buf-ptr (.createDataSource (data-accessor fact) n)]

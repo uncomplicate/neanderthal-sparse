@@ -294,10 +294,10 @@
   (with-rng-check x
     (mkl_rt/vdRngGaussian mkl_rt/VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2 stream (dim x) (double-ptr x) mu sigma)))
 
-(def ^:private ones-float (->RealNativeCppVector nil nil nil true
-                                                 (doto (float-pointer 1) (put! 0 1.0)) 1 0 0))
-(def ^:private ones-double (->RealNativeCppVector nil nil nil true
-                                                  (doto (double-pointer 1) (put! 0 1.0)) 1 0 0))
+(def ^:private ones-float (->RealBlockVector nil nil nil true
+                                             (doto (float-pointer 1) (put! 0 1.0)) 1 0 0))
+(def ^:private ones-double (->RealBlockVector nil nil nil true
+                                              (doto (double-pointer 1) (put! 0 1.0)) 1 0 0))
 
 (deftype FloatVectorEngine [])
 (real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt mkl-blas-layout ones-float)
