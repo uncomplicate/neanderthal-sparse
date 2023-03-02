@@ -3,9 +3,9 @@
              [core :refer [with-release let-release info Releaseable release]]
              [utils :refer [dragan-says-ex generate-seed]]]
             [uncomplicate.fluokitten.core :refer [fmap!]]
-            [uncomplicate.clojure-cpp :refer [long-pointer]]
+            [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer put!]]
             [uncomplicate.neanderthal
-             [core :refer [dim]]
+             [core :refer [dim entry]]
              [math :refer [f=] :as math]
              [block :refer [create-data-source initialize buffer offset stride]]]
             [uncomplicate.neanderthal.internal
@@ -48,7 +48,7 @@
   ([type name]
    (math "v" type name)))
 
-(defmacro real-vector-blas* [name t ptr cast blas lapack blas-layout]
+(defmacro real-vector-blas* [name t ptr cast blas lapack blas-layout ones]
   `(extend-type ~name
      Blas
      (swap [this# x# y#]
@@ -73,13 +73,15 @@
        (. ~blas ~(cblas 'cblas_i t 'amin) (dim x#) (~ptr x#) (stride x#)))
      (rot [this# x# y# c# s#]
        (. ~blas ~(cblas t 'rot) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~cast c#) (~cast s#)))
-     ;; (rotg [this# abcs] TODO
-     ;;   (mkl_rt/cblas_srotg (.buffer ^RealBlockVector abcs) (.offset ^Block abcs) (.stride ^Block abcs))
-     ;;   abcs)
+     (rotg [this# abcs#]
+       (check-stride abcs#)
+       (. ~blas ~(cblas t 'rotg) (~ptr abcs#) (~ptr abcs# 1) (~ptr abcs# 2) (~ptr abcs# 3))
+       abcs#)
      (rotm [this# x# y# param#]
-       (.~blas ~(cblas t 'rotm) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~ptr param#)))
-     ;; (rotmg [this# d1d2xy param]
-     ;;   (vector-rotmg mkl_rt/cblas_srotmg d1d2xy param))
+       (. ~blas ~(cblas t 'rotm) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~ptr param#)))
+     (rotmg [this# d1d2xy# param#]
+       (check-stride d1d2xy# param#)
+       (. ~blas ~(cblas t 'rotmg) (~ptr d1d2xy#) (~ptr d1d2xy# 1) (~ptr d1d2xy# 2) (~cast (entry d1d2xy# 3)) (~ptr param#)))
      (scal [this# alpha# x#]
        (. ~blas ~(cblas t 'scal) (dim x#) (~cast alpha#) (~ptr x#) (stride x#))
        x#)
@@ -89,12 +91,11 @@
      BlasPlus
      (amax [this# x#]
        (vector-amax x#))
-     ;; (subcopy [this# x y kx lx ky]
-     ;;   (vector-subcopy mkl_rt/cblas_scopy lx (.buffer ^RealBlockVector x) (+ (long kx) (.offset ^Block x)) (.stride ^Block x)
-     ;;                (.buffer ^RealBlockVector y) (+ (long ky) (.offset ^Block y)) (.stride ^Block y))
-     ;;   y)
-     ;; (sum [this# x]
-     ;;   (vector-sum CBLAS/sdot ^RealBlockVector x ^RealBlockVector ones-float))
+     (subcopy [this# x# y# kx# lx# ky#]
+       (. ~blas ~(cblas t 'copy) (int lx#) (~ptr x# kx#) (stride x#) (~ptr y# ky#) (stride y#))
+       y#)
+     (sum [this# x#]
+       (. ~blas ~(cblas t 'dot) (dim x#) (~ptr x#) (stride x#) (~ptr ~ones) 0))
      (imax [this# x#]
        (vector-imax x#))
      (imin [this# x#]
@@ -293,8 +294,13 @@
   (with-rng-check x
     (mkl_rt/vdRngGaussian mkl_rt/VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2 stream (dim x) (double-ptr x) mu sigma)))
 
+(def ^:private ones-float (->RealNativeCppVector nil nil nil true
+                                                 (doto (float-pointer 1) (put! 0 1.0)) 1 0 0))
+(def ^:private ones-double (->RealNativeCppVector nil nil nil true
+                                                  (doto (double-pointer 1) (put! 0 1.0)) 1 0 0))
+
 (deftype FloatVectorEngine [])
-(real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt mkl-blas-layout)
+(real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt mkl-blas-layout ones-float)
 (real-vector-math* FloatVectorEngine "s" float-ptr float)
 
 (extend-type FloatVectorEngine
@@ -306,7 +312,7 @@
       (float-gaussian (or rng-stream default-rng-stream) mu sigma x))))
 
 (deftype DoubleVectorEngine [])
-(real-vector-blas* DoubleVectorEngine "d" double-ptr double mkl_rt mkl_rt mkl-blas-layout)
+(real-vector-blas* DoubleVectorEngine "d" double-ptr double mkl_rt mkl_rt mkl-blas-layout ones-double)
 (real-vector-math* DoubleVectorEngine "d" double-ptr double)
 
 (extend-type DoubleVectorEngine

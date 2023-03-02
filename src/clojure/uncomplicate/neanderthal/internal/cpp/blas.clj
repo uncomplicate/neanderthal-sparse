@@ -10,7 +10,7 @@
   (:require [uncomplicate.commons
              [core :refer [with-release let-release Info info Releaseable release extract]]
              [utils :refer [dragan-says-ex]]]
-            [uncomplicate.clojure-cpp :refer [position! pointer]]
+            [uncomplicate.clojure-cpp :refer [position! pointer float-pointer double-pointer]]
             [uncomplicate.neanderthal
              [block :refer [buffer offset stride]]
              [core :refer [dim entry]]]
@@ -23,11 +23,17 @@
 #_(defn cpp-pointer [constructor x]
   (position! (constructor (buffer x)) (offset x)))
 
-(defn float-ptr ^FloatPointer [^Block x]
-  (.buffer x))
+(defn float-ptr
+  (^FloatPointer [^Block x]
+   (.buffer x))
+  (^FloatPointer [^Block x ^long i]
+   (.position (DoublePointer. ^FloatPointer (.buffer x)) i)))
 
-(defn double-ptr ^DoublePointer [^Block x]
-  (.buffer x))
+(defn double-ptr
+  (^DoublePointer [^Block x]
+   (.buffer x))
+  (^DoublePointer [^Block x ^long i]
+   (.position (DoublePointer. ^DoublePointer (.buffer x)) i)))
 
 ;; TODO Copied from host
 (defn vector-imax [^RealVector x]
