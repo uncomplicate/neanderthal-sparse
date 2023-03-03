@@ -23,6 +23,8 @@
 #_(defn cpp-pointer [constructor x]
   (position! (constructor (buffer x)) (offset x)))
 
+;; TODO move to structures
+
 (defn float-ptr
   (^FloatPointer [^Block x]
    (.buffer x))

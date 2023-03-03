@@ -15,14 +15,14 @@
     [utils :refer [dragan-says-ex]]]
    [uncomplicate.fluokitten.protocols
     :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold]]
-   [uncomplicate.clojure-cpp :refer [pointer-seq fill! capacity! byte-buffer float-pointer double-pointer
-                                     long-pointer int-pointer short-pointer byte-pointer
+   [uncomplicate.clojure-cpp :refer [pointer pointer-seq fill! capacity! byte-buffer float-pointer
+                                     double-pointer long-pointer int-pointer short-pointer byte-pointer
                                      element-count]]
    [uncomplicate.neanderthal
     [core :refer [transfer! copy! dim subvector vctr ge]]
     [real :refer [entry entry!]]
     [math :refer [ceil]]
-    [block :refer [entry-type]]]
+    [block :refer [entry-type offset]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [printing :refer [print-vector print-ge print-uplo print-banded print-diagonal]]
@@ -138,6 +138,20 @@
 
 ;; =======================================================================
 
+(defn block-vector
+  ([constructor fact master buf-ptr n ofst strd]
+   (let [da (data-accessor fact)]
+     (if (and (<= 0 n (.count da buf-ptr)))
+       (constructor fact da (vector-engine fact) master (pointer buf-ptr ofst) n strd)
+       (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
+  ([constructor fact master buf-ptr n strd]
+   (block-vector constructor fact master buf-ptr n 0 strd))
+  ([constructor fact n strd]
+   (let-release [buf-ptr (.createDataSource (data-accessor fact) n)]
+     (block-vector constructor fact true buf-ptr n 0 strd)))
+  ([constructor fact n]
+   (block-vector constructor fact true n 1)))
+
 (defmacro extend-block-vector [name block-vector]
   `(extend-type ~name
      Info
@@ -146,7 +160,7 @@
         :class ~name
         :device :cpu
         :dim (dim this#)
-        :offset (.ofst this#)
+        :offset (offset this#)
         :stride (.-strd this#)
         :master (.-master this#)
         :engine (info (.-eng this#))})
@@ -156,14 +170,14 @@
          :class ~name
          :device :cpu
          :dim (dim this#)
-         :offset (.ofst this#)
+         :offset (offset this#)
          :stride (.-strd this#)
          :master (.-master this#)
          :engine (info (.-eng this#))
          nil))
      Releaseable
      (release [this#]
-       (if 'master (release (.-buf-ptr this#)) true))
+       (if (.-master this#) (release (.-buf-ptr this#)) true))
      Container
      (raw
        ([this#]
@@ -182,14 +196,14 @@
        this#)
      Viewable
      (view [this#]
-       (~block-vector (.-fact this#) false (.-buf-ptr this#) (.-n this#) (.-ofst this#) (.-strd this#)))
+       (~block-vector (.-fact this#) false (.-buf-ptr this#) (.-n this#) 0 (.-strd this#)))
      DenseContainer
      (view-vctr
        ([this#]
         this#)
        ([this# stride-mult#]
         (~block-vector (.-fact this#) false (.-buf-ptr this#)
-         (ceil (/ (.-n this#) (long stride-mult#))) (.-ofst this#) (* (long stride-mult#) (.-strd this#)))))
+         (ceil (/ (.-n this#) (long stride-mult#))) 0 (* (long stride-mult#) (.-strd this#)))))
      MemoryContext
      (compatible? [this# y#]
        (compatible? (.-da this#) y#))
@@ -223,7 +237,7 @@
 ;; ============ Integer Vector ====================================================
 
 (deftype IntegerBlockVector [fact ^IntegerAccessor da eng master buf-ptr
-                             ^long n ^long ofst ^long strd]
+                             ^long n ^long strd]
   Object
   (hashCode [x]
     (-> (hash :IntegerBlockVector) (hash-combine n) (hash-combine (nrm2 eng x))))
@@ -238,7 +252,7 @@
           true))
       :default false))
   (toString [_]
-    (format "#IntegerBlockVector[%s, n:%d, offset: %d, stride:%d]" (entry-type da) n ofst strd))
+    (format "#IntegerBlockVector[%s, n:%d, stride:%d]" (entry-type da) n strd))
   Seqable
   (seq [x]
     (vector-seq x 0))
@@ -263,7 +277,7 @@
     (set-all eng val x)
     x)
   (set [x i val]
-    (.set da buf-ptr (+ ofst (* strd i)) val)
+    (.set da buf-ptr (* strd i) val)
     x)
   (setBoxed [x val]
     (.set x val))
@@ -282,7 +296,7 @@
   (buffer [_]
     buf-ptr)
   (offset [_]
-    ofst)
+    0)
   (stride [_]
     strd)
   (isContiguous [_]
@@ -290,24 +304,15 @@
   (dim [_]
     n)
   (entry [_ i]
-    (.get da buf-ptr (+ ofst (* strd i))))
+    (.get da buf-ptr (* strd i)))
   (boxedEntry [x i]
     (.entry x i))
   (subvector [_ k l]
-    (integer-block-vector fact false buf-ptr l (+ ofst (* k strd)) strd)))
+    (integer-block-vector fact false buf-ptr l (* k strd) strd)))
 
 (extend-block-vector IntegerBlockVector integer-block-vector)
 
-(defn integer-block-vector
-  ([fact master buf-ptr n ofst strd]
-   (let [da (data-accessor fact)]
-     (if (and (<= 0 n (.count da buf-ptr)))
-       (->IntegerBlockVector fact da (vector-engine fact) master buf-ptr n ofst strd)
-       (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
-  ([fact n]
-   (let-release [buf-ptr (.createDataSource (data-accessor fact) n)]
-     (integer-block-vector fact true buf-ptr n 0 1))))
-
+(def integer-block-vector (partial block-vector ->IntegerBlockVector))
 
 (defmethod print-method IntegerBlockVector
   [^Vector x ^java.io.Writer w]
@@ -348,7 +353,7 @@
 ;; ============ Real Vector ====================================================
 
 (deftype RealBlockVector [fact ^RealAccessor da eng master buf-ptr
-                          ^long n ^long ofst ^long strd]
+                          ^long n ^long strd]
   Object
   (hashCode [x]
     (-> (hash :RealBlockVector) (hash-combine n) (hash-combine (nrm2 eng x))))
@@ -363,7 +368,7 @@
           true))
       :default false))
   (toString [_]
-    (format "#RealBlockVector[%s, n:%d, offset: %d, stride:%d]" (entry-type da) n ofst strd))
+    (format "#RealBlockVector[%s, n:%d, stride:%d]" (entry-type da) n strd))
   Seqable
   (seq [x]
     (vector-seq x 0))
@@ -402,7 +407,7 @@
         (.set x i val)))
     x)
   (set [x i val]
-    (.set da buf-ptr (+ ofst (* strd i)) val)
+    (.set da buf-ptr (* strd i) val)
     x)
   (setBoxed [x val]
     (.set x val))
@@ -421,7 +426,7 @@
   (buffer [_]
     buf-ptr)
   (offset [_]
-    ofst)
+    0)
   (stride [_]
     strd)
   (isContiguous [_]
@@ -429,23 +434,15 @@
   (dim [_]
     n)
   (entry [_ i]
-    (.get da buf-ptr (+ ofst (* strd i))))
+    (.get da buf-ptr (* strd i)))
   (boxedEntry [x i]
     (.entry x i))
   (subvector [_ k l]
-    (real-block-vector fact false buf-ptr l (+ ofst (* k strd)) strd)))
+    (real-block-vector fact false buf-ptr l (* k strd) strd)))
 
 (extend-block-vector RealBlockVector real-block-vector)
 
-(defn real-block-vector
-  ([fact master buf-ptr n ofst strd]
-   (let [da (data-accessor fact)]
-     (if (and (<= 0 n (.count da buf-ptr)))
-       (->RealBlockVector fact da (vector-engine fact) master buf-ptr n ofst strd)
-       (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
-  ([fact n]
-   (let-release [buf-ptr (.createDataSource (data-accessor fact) n)]
-     (real-block-vector fact true buf-ptr n 0 1))))
+(def real-block-vector (partial block-vector ->RealBlockVector))
 
 (defmethod print-method RealBlockVector [^Vector x ^java.io.Writer w]
   (.write w (str x))
