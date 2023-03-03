@@ -21,7 +21,8 @@
    [uncomplicate.neanderthal
     [core :refer [transfer! copy! dim subvector vctr ge]]
     [real :refer [entry entry!]]
-    [math :refer [ceil]]]
+    [math :refer [ceil]]
+    [block :refer [entry-type]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [printing :refer [print-vector print-ge print-uplo print-banded print-diagonal]]
@@ -139,6 +140,27 @@
 
 (defmacro extend-block-vector [name block-vector]
   `(extend-type ~name
+     Info
+     (info [this#]
+       {:entry-type (.entryType (data-accessor this#))
+        :class ~name
+        :device :cpu
+        :dim (dim this#)
+        :offset (.ofst this#)
+        :stride (.-strd this#)
+        :master (.-master this#)
+        :engine (info (.-eng this#))})
+     (info [this# info-type#]
+       (case info-type#
+         :entry-type (.entryType (data-accessor this#))
+         :class ~name
+         :device :cpu
+         :dim (dim this#)
+         :offset (.ofst this#)
+         :stride (.-strd this#)
+         :master (.-master this#)
+         :engine (info (.-eng this#))
+         nil))
      Releaseable
      (release [this#]
        (if 'master (release (.-buf-ptr this#)) true))
@@ -202,7 +224,21 @@
 
 (deftype IntegerBlockVector [fact ^IntegerAccessor da eng master buf-ptr
                              ^long n ^long ofst ^long strd]
-  ;; TODO Object Info
+  Object
+  (hashCode [x]
+    (-> (hash :IntegerBlockVector) (hash-combine n) (hash-combine (nrm2 eng x))))
+  (equals [x y]
+    (cond
+      (nil? y) false
+      (identical? x y) true
+      (and (instance? IntegerBlockVector y) (compatible? da y) (fits? x y))
+      (loop [i 0]
+        (if (< i n)
+          (and (= (.entry x i) (.entry ^IntegerBlockVector y i)) (recur (inc i)))
+          true))
+      :default false))
+  (toString [_]
+    (format "#IntegerBlockVector[%s, n:%d, offset: %d, stride:%d]" (entry-type da) n ofst strd))
   Seqable
   (seq [x]
     (vector-seq x 0))
@@ -313,7 +349,21 @@
 
 (deftype RealBlockVector [fact ^RealAccessor da eng master buf-ptr
                           ^long n ^long ofst ^long strd]
-  ;; TODO Object Info
+  Object
+  (hashCode [x]
+    (-> (hash :RealBlockVector) (hash-combine n) (hash-combine (nrm2 eng x))))
+  (equals [x y]
+    (cond
+      (nil? y) false
+      (identical? x y) true
+      (and (instance? RealBlockVector y) (compatible? da y) (fits? x y))
+      (loop [i 0]
+        (if (< i n)
+          (and (= (.entry x i) (.entry ^RealBlockVector y i)) (recur (inc i)))
+          true))
+      :default false))
+  (toString [_]
+    (format "#RealBlockVector[%s, n:%d, offset: %d, stride:%d]" (entry-type da) n ofst strd))
   Seqable
   (seq [x]
     (vector-seq x 0))
