@@ -317,7 +317,7 @@
 
 (defmethod print-method IntegerBlockVector
   [^Vector x ^java.io.Writer w]
-  (.write w (format "%s%s" (str x) (pr-str (take 100 (seq x))))))
+  (.write w (format "%s%s" (str x) (pr-str (take *print-length* (seq x))))))
 
 (defmethod transfer! [IntegerBlockVector IntegerBlockVector]
   [^IntegerBlockVector source ^IntegerBlockVector destination]
@@ -500,7 +500,7 @@
 (defprotocol SparseFactory ;;TODO move to api.
   (cs-vector-engine [this]))
 
-(deftype CSVector [fact eng ^Block nzx ^Block indx ^long n]
+(deftype CSVector [fact eng ^Block nzx ^IntegerVector indx ^long n]
   Object
   (hashCode [_]
     (-> (hash :CSVector) (hash-combine nzx) (hash-combine indx)))
@@ -557,21 +557,25 @@
   DataAccessorProvider
   (data-accessor [_]
     (data-accessor fact))
-  ;; Container ;;TODO
-  ;; (raw [_]
-  ;;   (let-release [raw-nzx (raw nzx)]
-  ;;     (cs-vector fact raw-nzx (view indx))))
-  ;; (raw [_ fact]
-  ;;   (create-cs-vector (factory fact) n false))
-  ;; (zero [x]
-  ;;   (zero x fact))
-  ;; (zero [_ fact]
-  ;;   (create-vector (factory fact) n true))
-  ;; (host [x] ;;TODO
-  ;;   (let-release [res (raw x)]
-  ;;     (copy eng x res)))
-  ;; (native [x];;TODO
-  ;;   x)
+  Container
+  (raw [x]
+    (raw x fact))
+  (raw [_ fact]
+    (cs-vector (factory fact) n (view indx) false))
+  (zero [x]
+    (zero x fact))
+  (zero [_ fact]
+    (cs-vector (factory fact) n (view indx) true))
+  (host [x]
+    (let-release [host-nzx (host nzx)
+                  host-indx (host indx)]
+      (cs-vector n host-indx host-nzx)))
+  (native [x]
+    (let-release [native-nzx (native nzx)]
+      (if (= nzx native-nzx)
+        x
+        (let-release [native-indx (native indx)]
+          (cs-vector n native-indx native-nzx)))))
   Viewable
   (view [x]
     (cs-vector fact (view nzx) (view indx)))
@@ -601,11 +605,52 @@
     nil))
 
 (defn cs-vector
-  ([fact ^long n indx nzx]
-   (if (and (<= 0 (dim nzx) n) (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx))
-            (fits? nzx indx))
-     (->CSVector fact (cs-vector-engine fact) nzx indx n)
-     (throw (ex-info "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx}))));;TODO error message
-  ([fact ^long n indx]
-   (let-release [nzx (create-vector fact (dim indx) false)]
-     (cs-vector fact n indx nzx))))
+  ([^long n indx nzx]
+   (let [fact (factory nzx)]
+     (if (and (<= 0 (dim nzx) n) (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx))
+              (fits? nzx indx))
+       (->CSVector fact (cs-vector-engine fact) nzx indx n)
+       (throw (ex-info "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx})))));;TODO error message
+  ([fact ^long n indx init]
+   (let-release [nzx (create-vector fact (dim indx) init)]
+     (cs-vector n indx nzx))))
+
+(defmethod print-method CSVector [^Vector x ^java.io.Writer w]
+  (.write w (format "%s%s" (str x) (pr-str (take *print-length* (indices x)))))
+  (print-vector w (entries x)))
+
+(defmethod transfer! [CSVector CSVector]
+  [source destination]
+  (transfer! (entries source) (entries destination)))
+
+(defmethod transfer! [clojure.lang.Sequential CSVector]
+  [source destination]
+  (transfer! source (entries destination)))
+
+(defmethod transfer! [(Class/forName "[D") CSVector]
+  [source destination]
+  (transfer! source (entries destination)))
+
+(defmethod transfer! [(Class/forName "[F") CSVector]
+  [source destination]
+  (transfer! source (entries destination)))
+
+(defmethod transfer! [(Class/forName "[J") CSVector]
+  [source destination]
+  (transfer! source (entries destination)))
+
+(defmethod transfer! [(Class/forName "[I") CSVector]
+  [source destination]
+  (transfer! source (entries destination)))
+
+(defmethod transfer! [CSVector (Class/forName "[D")]
+  [source destination]
+  (transfer! source (entries destination)))
+
+(defmethod transfer! [CSVector (Class/forName "[F")]
+  [source destination]
+  (transfer! source (entries destination)))
+
+(defmethod transfer! [RealBlockVector CSVector]
+  [^RealBlockVector source ^CSVector destination]
+  "TODO gthr")
