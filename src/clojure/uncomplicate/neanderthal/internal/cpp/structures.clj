@@ -22,7 +22,7 @@
     [core :refer [transfer! copy! dim subvector vctr ge]]
     [real :refer [entry entry!]]
     [math :refer [ceil]]
-    [block :refer [entry-type offset]]]
+    [block :refer [entry-type offset stride]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [printing :refer [print-vector print-ge print-uplo print-banded print-diagonal]]
@@ -33,13 +33,13 @@
            org.bytedeco.mkl.global.mkl_rt
            [org.bytedeco.javacpp FloatPointer DoublePointer LongPointer IntPointer ShortPointer
             BytePointer]
-           [uncomplicate.neanderthal.internal.api
+           [uncomplicate.neanderthal.internal.api Block
             VectorSpace Vector RealVector Matrix IntegerVector DataAccessor RealChangeable
             IntegerChangeable RealNativeMatrix RealNativeVector IntegerNativeVector DenseStorage
             FullStorage LayoutNavigator RealLayoutNavigator Region MatrixImplementation GEMatrix
             UploMatrix BandedMatrix PackedMatrix DiagonalMatrix]))
 
-(declare real-block-vector integer-block-vector)
+(declare real-block-vector integer-block-vector cs-vector)
 
 ;; ================ from buffer-block ====================================
 (defn ^:private vector-seq [^Vector vector ^long i]
@@ -141,7 +141,7 @@
 (defn block-vector
   ([constructor fact master buf-ptr n ofst strd]
    (let [da (data-accessor fact)]
-     (if (and (<= 0 n (.count da buf-ptr)))
+     (if (<= 0 n (.count da buf-ptr))
        (constructor fact da (vector-engine fact) master (pointer buf-ptr ofst) n strd)
        (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
   ([constructor fact master buf-ptr n strd]
@@ -150,7 +150,7 @@
    (let-release [buf-ptr (.createDataSource (data-accessor fact) n)]
      (block-vector constructor fact true buf-ptr n 0 strd)))
   ([constructor fact n]
-   (block-vector constructor fact true n 1)))
+   (block-vector constructor fact n 1)))
 
 (defmacro extend-block-vector [name block-vector]
   `(extend-type ~name
@@ -246,10 +246,11 @@
       (nil? y) false
       (identical? x y) true
       (and (instance? IntegerBlockVector y) (compatible? da y) (fits? x y))
-      (loop [i 0]
-        (if (< i n)
-          (and (= (.entry x i) (.entry ^IntegerBlockVector y i)) (recur (inc i)))
-          true))
+      (or (= buf-ptr (.buffer ^Block y))
+          (loop [i 0]
+            (if (< i n)
+              (and (= (.entry x i) (.entry ^IntegerBlockVector y i)) (recur (inc i)))
+              true)))
       :default false))
   (toString [_]
     (format "#IntegerBlockVector[%s, n:%d, stride:%d]" (entry-type da) n strd))
@@ -362,10 +363,11 @@
       (nil? y) false
       (identical? x y) true
       (and (instance? RealBlockVector y) (compatible? da y) (fits? x y))
-      (loop [i 0]
-        (if (< i n)
-          (and (= (.entry x i) (.entry ^RealBlockVector y i)) (recur (inc i)))
-          true))
+      (or (= buf-ptr (.buffer ^Block y))
+          (loop [i 0]
+            (if (< i n)
+              (and (= (.entry x i) (.entry ^RealBlockVector y i)) (recur (inc i)))
+              true)))
       :default false))
   (toString [_]
     (format "#RealBlockVector[%s, n:%d, stride:%d]" (entry-type da) n strd))
@@ -487,3 +489,123 @@
 (defmethod transfer! [RealBlockVector (Class/forName "[F")]
   [^RealBlockVector source ^floats destination]
   (transfer-vector-array source destination))
+
+;; ======================= Compressed Sparse Vector ======================================
+;; TODO Move to a more general namespace.
+
+(defprotocol SparseCompressed
+  (entries [this])
+  (indices [this]))
+
+(defprotocol SparseFactory ;;TODO move to api.
+  (cs-vector-engine [this]))
+
+(deftype CSVector [fact eng ^Block nzx ^Block indx ^long n]
+  Object
+  (hashCode [_]
+    (-> (hash :CSVector) (hash-combine nzx) (hash-combine indx)))
+  (equals [x y]
+    (cond
+      (nil? y) false
+      (identical? x y) true
+      (instance? CSVector y)
+      (and  (= nzx (entries y)) (= indx (indices y)))
+      :default :false))
+  (toString [_]
+    (format "#CSVector[%s, n:%d]" (entry-type (data-accessor nzx)) n))
+  Info
+  (info [x]
+    {:entry-type (.entryType (data-accessor nzx))
+     :class (class x)
+     :device (info nzx :device)
+     :dim n
+     :engine (info eng)})
+  (info [x info-type]
+    (case info-type
+      :entry-type (.entryType (data-accessor nzx))
+      :class (class x)
+      :device (info nzx :device)
+      :dim n
+      :engine (info eng)
+      nil))
+  Releaseable
+  (release [_]
+    (release nzx)
+    (release indx)
+    true)
+  Seqable
+  (seq [x]
+    (vector-seq nzx 0))
+  MemoryContext
+  (compatible? [_ y]
+    (compatible? nzx (entries y)))
+  (fits? [_ y]
+    (and (= n (dim y))
+         (or (nil? (indices y)) (= indx (indices y)))))
+  (device [_]
+    (device nzx))
+  EngineProvider
+  (engine [_]
+    eng)
+  FactoryProvider
+  (factory [_]
+    fact)
+  (native-factory [_]
+    (native-factory fact))
+  (index-factory [_]
+    (index-factory fact))
+  DataAccessorProvider
+  (data-accessor [_]
+    (data-accessor fact))
+  ;; Container ;;TODO
+  ;; (raw [_]
+  ;;   (let-release [raw-nzx (raw nzx)]
+  ;;     (cs-vector fact raw-nzx (view indx))))
+  ;; (raw [_ fact]
+  ;;   (create-cs-vector (factory fact) n false))
+  ;; (zero [x]
+  ;;   (zero x fact))
+  ;; (zero [_ fact]
+  ;;   (create-vector (factory fact) n true))
+  ;; (host [x] ;;TODO
+  ;;   (let-release [res (raw x)]
+  ;;     (copy eng x res)))
+  ;; (native [x];;TODO
+  ;;   x)
+  Viewable
+  (view [x]
+    (cs-vector fact (view nzx) (view indx)))
+  Block
+  (buffer [_]
+    (.buffer nzx))
+  (offset [_]
+    (.offset nzx))
+  (stride [_]
+    (.stride nzx))
+  (isContiguous [_]
+    (.isContiguous ^Block nzx))
+  VectorSpace
+  (dim [_]
+    n)
+  SparseCompressed
+  (entries [this]
+    nzx)
+  (indices [this]
+    indx))
+
+(extend-type RealBlockVector
+  SparseCompressed
+  (entries [this]
+    this)
+  (indices [this]
+    nil))
+
+(defn cs-vector
+  ([fact ^long n indx nzx]
+   (if (and (<= 0 (dim nzx) n) (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx))
+            (fits? nzx indx))
+     (->CSVector fact (cs-vector-engine fact) nzx indx n)
+     (throw (ex-info "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx}))));;TODO error message
+  ([fact ^long n indx]
+   (let-release [nzx (create-vector fact (dim indx) false)]
+     (cs-vector fact n indx nzx))))

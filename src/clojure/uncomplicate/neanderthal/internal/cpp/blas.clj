@@ -17,7 +17,7 @@
             [uncomplicate.neanderthal.internal.api :refer [iamax engine data-accessor]]
             [uncomplicate.neanderthal.internal.cpp.mkl.constants :refer :all])
   (:import [org.bytedeco.mkl.global mkl_rt]
-           [org.bytedeco.javacpp Pointer FloatPointer DoublePointer]
+           [org.bytedeco.javacpp Pointer FloatPointer DoublePointer IntPointer]
            [uncomplicate.neanderthal.internal.api VectorSpace Block RealVector]))
 
 #_(defn cpp-pointer [constructor x]
@@ -36,6 +36,9 @@
    (.buffer x))
   (^DoublePointer [^Block x ^long i]
    (.position (DoublePointer. ^DoublePointer (.buffer x)) i)))
+
+(defn int-ptr ^IntPointer [^Block x]
+  (.buffer x))
 
 (defn coerce-double-ptr ^DoublePointer
   (^DoublePointer [^Block x]

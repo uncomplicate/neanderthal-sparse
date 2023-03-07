@@ -13,8 +13,8 @@
             [uncomplicate.fluokitten.core :refer [fmap!]]
             [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer put!]]
             [uncomplicate.neanderthal
-             [core :refer [dim entry]]
-             [math :refer [f=] :as math]
+             [core :refer [dim entry] :as core]
+             [math :refer [f=]]
              [block :refer [create-data-source initialize buffer offset stride]]]
             [uncomplicate.neanderthal.internal
              [api :refer :all]
@@ -23,7 +23,7 @@
             [uncomplicate.neanderthal.internal.cpp
              [structures :refer :all]
              [lapack :refer :all]
-             [blas :refer [float-ptr double-ptr coerce-double-ptr coerce-float-ptr vector-imax vector-imin]]]
+             [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr vector-imax vector-imin]]]
             [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc!]]
             [uncomplicate.neanderthal.internal.host.mkl
              :refer [sigmoid-over-tanh vector-ramp vector-relu vector-elu]])
@@ -119,7 +119,7 @@
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
      (set-all [this# alpha# x#]
        (with-lapack-check
-         (. ~lapack ~(lapacke t 'laset) (int ~(:row blas-layout)) ~(byte (int \g)) (dim x#) 1
+         (. ~lapack ~(lapacke t 'laset) (int ~(:row mkl-blas-layout)) ~(byte (int \g)) (dim x#) 1
             (~cast alpha#) (~cast alpha#) (~ptr x#) (stride x#)))
        x#)
      (axpby [this# alpha# x# beta# y#]
@@ -169,7 +169,9 @@
        y#)
      BlasPlus
      (amax [this# x#]
-       (vector-amax x#))
+       (if (< 0 (dim x#))
+         (Math/abs (double (entry x# (iamax this# x#))))
+         0.0))
      (subcopy [this# x# y# kx# lx# ky#]
        (. ~blas ~(cblas t 'copy) (int lx#) (~ptr x# kx#) (stride x#) (~ptr y# ky#) (stride y#))
        y#)
@@ -218,6 +220,12 @@
        (dragan-says-ex "This engine cannot generate random entries in host vectors with stride. Sorry."
                        {:v (info ~x)}))
      ~x))
+
+(defmacro with-mkl-check [expr res]
+  `(let [err# ~expr]
+     (if (zero? err#)
+       ~res
+       (throw (ex-info "MKL error." {:error-code err#})))))
 
 (defn create-stream-ars5 ^mkl_rt$VSLStreamStatePtr [seed]
   (let-release [stream (mkl_rt$VSLStreamStatePtr. (long-pointer 1))]
@@ -374,9 +382,9 @@
     (mkl_rt/vdRngGaussian mkl_rt/VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2 stream (dim x) (double-ptr x) mu sigma)))
 
 (def ^:private ones-float (->RealBlockVector nil nil nil true
-                                             (doto (float-pointer 1) (put! 0 1.0)) 1 0 0))
+                                             (doto (float-pointer 1) (put! 0 1.0)) 1 0))
 (def ^:private ones-double (->RealBlockVector nil nil nil true
-                                              (doto (double-pointer 1) (put! 0 1.0)) 1 0 0))
+                                              (doto (double-pointer 1) (put! 0 1.0)) 1 0))
 
 (deftype FloatVectorEngine [])
 (real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt mkl-blas-layout ones-float)
@@ -410,8 +418,91 @@
 (integer-vector-blas* IntVectorEngine "s" coerce-float-ptr mkl_rt)
 (integer-vector-blas-plus* IntVectorEngine "s" float coerce-float-ptr mkl_rt mkl_rt)
 
+;; ========================= Sparse Vector engines ============================================
+
+(def ^{:no-doc true :const true} MIXED_UNSUPPORTED_MSG
+  "This operation is not supported on mixed sparse and dense vectors.")
+
+(def ^{:no-doc true :const true} SPARSE_UNSUPPORTED_MSG
+  "This operation is not supported on sparse.")
+
+
+(defmacro real-cs-vector-blas* [name t ptr idx-ptr cast blas ones]
+  `(extend-type ~name
+     Blas
+     (swap [this# x# y#]
+       (if (indices y#)
+         (swap (engine (entries x#)) (entries x#) (entries y#))
+         (throw (UnsupportedOperationException. MIXED_UNSUPPORTED_MSG)))
+       y#)
+     (copy [this# x# y#]
+       (if (indices y#)
+         (copy (engine (entries x#)) (entries x#) (entries y#))
+         (throw (UnsupportedOperationException. MIXED_UNSUPPORTED_MSG)))
+       y#)
+     (dot [this# x# y#]
+       (if (indices y#)
+         (dot (engine (entries x#)) (entries x#) (entries y#))
+         (. ~blas ~(cblas t 'doti) (dim (entries x#)) (~ptr x#) (~idx-ptr (indices x#)) (~ptr y#))))
+     (nrm1 [this# x#]
+       (asum this# x#))
+     (nrm2 [this# x#]
+       (nrm2 (engine (entries x#)) (entries x#)))
+     (nrmi [this# x#]
+       (amax this# x#))
+     (asum [this# x#]
+       (asum (engine (entries x#)) (entries x#)))
+     (iamax [this# x#]
+       (entry (indices x#) (iamax (engine (entries x#)) (entries x#))))
+     (iamin [this# x#]
+       (entry (indices x#) (iamin (engine (entries x#)) (entries x#))))
+     (rot [this# x# y# c# s#]
+       (if (indices y#)
+         (rot (engine (entries x#)) (entries x#) (entries y#) c# s#)
+         (. ~blas ~(cblas t 'roti) (dim (entries x#))
+            (~ptr x#) (~idx-ptr (indices x#)) (~ptr y#) (~cast c#) (~cast s#))))
+     (rotg [this# abcs#]
+       (throw (UnsupportedOperationException. SPARSE_UNSUPPORTED_MSG)))
+     (rotm [this# x# y# param#]
+       (throw (UnsupportedOperationException. SPARSE_UNSUPPORTED_MSG)))
+     (rotmg [this# d1d2xy# param#]
+       (throw (UnsupportedOperationException. SPARSE_UNSUPPORTED_MSG)))
+     (scal [this# alpha# x#]
+       (scal (engine (entries x#)) alpha# (entries x#))
+       x#)
+     (axpy [this# alpha# x# y#]
+       (if (indices y#)
+         (axpy (engine (entries x#)) alpha# (entries x#) (entries y#))
+         (. ~blas ~(cblas t 'axpyi) (dim (entries x#))
+            (~cast alpha#) (~ptr x#) (~idx-ptr (indices x#)) (~ptr y#)))
+       y#)
+     BlasPlus
+     (amax [this# x#]
+       (amax (engine (entries x#)) (entries x#)))
+     (subcopy [this# x# y# kx# lx# ky#]
+       (throw (UnsupportedOperationException. SPARSE_UNSUPPORTED_MSG)))
+     (sum [this# x#]
+       (sum (engine (entries x#)) (entries x#)))
+     (imax [this# x#]
+       (entry (indices x#) (vector-imax (entries x#))))
+     (imin [this# x#]
+       (entry (indices x#) (vector-imin (entries x#))))
+     (set-all [this# alpha# x#]
+       (set-all (engine (entries x#)) alpha# (entries x#))
+       x#)
+     (axpby [this# alpha# x# beta# y#] ;; TODO axpby will be available in JavaCPP 1.5.9
+       (scal (engine y#) beta# (entries y#))
+       (axpy this# alpha# x# y#)
+       y#)))
+
+(deftype FloatCSVectorEngine [])
+(real-cs-vector-blas* FloatCSVectorEngine "s" float-ptr int-ptr float mkl_rt ones-float)
+
+(deftype DoubleCSVectorEngine [])
+(real-cs-vector-blas* DoubleCSVectorEngine "d" double-ptr int-ptr double mkl_rt ones-double)
+
 (deftype MKLRealFactory [index-fact ^DataAccessor da
-                         vector-eng]
+                         vector-eng cs-vector-eng]
   DataAccessorProvider
   (data-accessor [_]
     da)
@@ -421,7 +512,7 @@
   (native-factory [this]
     this)
   (index-factory [this]
-    @index-fact)
+    index-fact)
   MemoryContext
   (compatible? [_ o]
     (compatible? da o))
@@ -436,6 +527,9 @@
       res))
   (vector-engine [_]
     vector-eng)
+  SparseFactory
+  (cs-vector-engine [_]
+    cs-vector-eng)
   )
 
 (deftype MKLIntegerFactory [index-fact ^DataAccessor da vector-eng]
@@ -448,7 +542,7 @@
   (native-factory [this]
     this)
   (index-factory [this]
-    @index-fact)
+    index-fact)
   MemoryContext
   (compatible? [_ o]
     (compatible? da o))
@@ -474,8 +568,8 @@
 
 (def mkl-float
   (->MKLRealFactory mkl-int float-accessor
-                    (->FloatVectorEngine)))
+                    (->FloatVectorEngine) (->FloatCSVectorEngine)))
 
 (def mkl-double
   (->MKLRealFactory mkl-int double-accessor
-                    (->DoubleVectorEngine)))
+                    (->DoubleVectorEngine) (->DoubleCSVectorEngine)))
