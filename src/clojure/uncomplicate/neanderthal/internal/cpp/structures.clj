@@ -491,6 +491,10 @@
   (transfer-vector-array source destination))
 
 ;; ======================= Compressed Sparse Vector ======================================
+;; TODO move to API
+(defprotocol SparseBlas
+  (gthr [this y x]))
+
 ;; TODO Move to a more general namespace.
 
 (defprotocol SparseCompressed
@@ -651,6 +655,7 @@
   [source destination]
   (transfer! source (entries destination)))
 
+;;TODO handle different types (float/double...)
 (defmethod transfer! [RealBlockVector CSVector]
   [^RealBlockVector source ^CSVector destination]
-  "TODO gthr")
+  (gthr (engine destination) source destination))

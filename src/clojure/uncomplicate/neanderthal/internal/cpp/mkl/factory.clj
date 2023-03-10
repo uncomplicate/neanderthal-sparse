@@ -426,7 +426,6 @@
 (def ^{:no-doc true :const true} SPARSE_UNSUPPORTED_MSG
   "This operation is not supported on sparse.")
 
-
 (defmacro real-cs-vector-blas* [name t ptr idx-ptr cast blas ones]
   `(extend-type ~name
      Blas
@@ -495,13 +494,22 @@
        (axpy this# alpha# x# y#)
        y#)))
 
+(defmacro real-cs-vector-sparse-blas* [name t ptr idx-ptr blas]
+  `(extend-type ~name
+     SparseBlas
+     (gthr [this# y# x#]
+       (. ~blas ~(cblas t 'gthr) (dim (entries x#)) (~ptr y#) (~ptr x#) (~idx-ptr (indices x#)))
+       x#)))
+
 (deftype FloatCSVectorEngine [])
 (real-cs-vector-blas* FloatCSVectorEngine "s" float-ptr int-ptr float mkl_rt ones-float)
 (real-vector-math* FloatCSVectorEngine "s" float-ptr float)
+(real-cs-vector-sparse-blas* FloatCSVectorEngine "s" float-ptr int-ptr mkl_rt)
 
 (deftype DoubleCSVectorEngine [])
 (real-cs-vector-blas* DoubleCSVectorEngine "d" double-ptr int-ptr double mkl_rt ones-double)
 (real-vector-math* DoubleCSVectorEngine "d" double-ptr double)
+(real-cs-vector-sparse-blas* DoubleCSVectorEngine "d" double-ptr int-ptr mkl_rt)
 
 (deftype MKLRealFactory [index-fact ^DataAccessor da
                          vector-eng cs-vector-eng]
