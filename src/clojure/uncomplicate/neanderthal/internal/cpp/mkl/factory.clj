@@ -497,9 +497,11 @@
 
 (deftype FloatCSVectorEngine [])
 (real-cs-vector-blas* FloatCSVectorEngine "s" float-ptr int-ptr float mkl_rt ones-float)
+(real-vector-math* FloatCSVectorEngine "s" float-ptr float)
 
 (deftype DoubleCSVectorEngine [])
 (real-cs-vector-blas* DoubleCSVectorEngine "d" double-ptr int-ptr double mkl_rt ones-double)
+(real-vector-math* DoubleCSVectorEngine "d" double-ptr double)
 
 (deftype MKLRealFactory [index-fact ^DataAccessor da
                          vector-eng cs-vector-eng]
