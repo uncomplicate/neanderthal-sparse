@@ -658,4 +658,5 @@
 ;;TODO handle different types (float/double...)
 (defmethod transfer! [RealBlockVector CSVector]
   [^RealBlockVector source ^CSVector destination]
-  (gthr (engine destination) source destination))
+  (gthr (engine destination) source destination)
+  destination)
