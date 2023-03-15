@@ -13,28 +13,34 @@
             [uncomplicate.fluokitten.core :refer [fmap!]]
             [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer put!]]
             [uncomplicate.neanderthal
-             [core :refer [dim entry] :as core]
+             [core :refer [dim entry mrows ncols] :as core]
              [math :refer [f=]]
              [block :refer [create-data-source initialize buffer offset stride]]]
             [uncomplicate.neanderthal.internal
              [api :refer :all]
-             [navigation :refer [full-storage]]
-             [common :refer [check-stride check-eq-navigators real-accessor]]]
+             [navigation :refer [full-storage accu-layout dostripe-layout]]
+             [common :refer [check-stride check-eq-navigators]]]
             [uncomplicate.neanderthal.internal.cpp
              [structures :refer :all]
              [lapack :refer :all]
-             [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr vector-imax vector-imin]]]
+             [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
+                           vector-imax vector-imin ge-map ge-reduce]]]
             [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc!]]
             [uncomplicate.neanderthal.internal.host.mkl
              :refer [sigmoid-over-tanh vector-ramp vector-relu vector-elu]])
-  (:import [uncomplicate.neanderthal.internal.api DataAccessor Block Vector]
+  (:import [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
+            GEMatrix DenseStorage]
            [org.bytedeco.mkl.global mkl_rt mkl_rt$VSLStreamStatePtr]))
 
 ;; =============== Factories ==================================================
 
-(def ^:const mkl-blas-layout
+(def ^:const blas-layout
   {:row mkl_rt/CblasRowMajor
    :column mkl_rt/CblasColMajor})
+
+(def ^:const blas-transpose
+  {:trans mkl_rt/CblasTrans
+   :no-trans mkl_rt/CblasNoTrans})
 
 (declare mkl-int)
 
@@ -67,67 +73,67 @@
 (defmacro integer-vector-blas* [name t ptr blas]
   `(extend-type ~name
      Blas
-     (swap [this# x# y#]
+     (swap [_# x# y#]
        (. ~blas ~(cblas t 'swap) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
        x#)
-     (copy [this# x# y#]
+     (copy [_# x# y#]
        (. ~blas ~(cblas t 'copy) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
        y#)
-     (dot [this# x# y#]
+     (dot [_# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (nrm1 [this# x#]
+     (nrm1 [_# x#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (nrm2 [this# x#]
+     (nrm2 [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (nrmi [this# x#]
+     (nrmi [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (asum [this# x#]
+     (asum [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (iamax [this# x#]
+     (iamax [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (iamin [this# x#]
+     (iamin [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (rot [this# x# y# c# s#]
+     (rot [_# _# _# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (rotg [this# abcs#]
+     (rotg [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (rotm [this# x# y# param#]
+     (rotm [_# _# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (rotmg [this# d1d2xy# param#]
+     (rotmg [_# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (scal [this# alpha# x#]
+     (scal [_# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (axpy [this# alpha# x# y#]
+     (axpy [_# _# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
      Lapack
-     (srt [this# x# increasing#]
+     (srt [_# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))))
 
 (defmacro integer-vector-blas-plus* [name t cast ptr blas lapack]
   `(extend-type ~name
      BlasPlus
-     (amax [this# x#]
+     (amax [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (subcopy [this# x# y# kx# lx# ky#]
+     (subcopy [_# x# y# kx# lx# ky#]
        (. ~blas ~(cblas t 'copy) (int lx#) (~ptr x# kx#) (stride x#) (~ptr y# ky#) (stride y#))
        y#)
-     (sum [this# x#]
+     (sum [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (imax [this# x#]
+     (imax [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (imin [this# x#]
+     (imin [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (set-all [this# alpha# x#]
+     (set-all [_# alpha# x#]
        (with-lapack-check
-         (. ~lapack ~(lapacke t 'laset) (int ~(:row mkl-blas-layout)) ~(byte (int \g)) (dim x#) 1
+         (. ~lapack ~(lapacke t 'laset) ~(int (:row blas-layout)) ~(byte (int \g)) (dim x#) 1
             (~cast alpha#) (~cast alpha#) (~ptr x#) (stride x#)))
        x#)
-     (axpby [this# alpha# x# beta# y#]
+     (axpby [_# _# _# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))))
 
 ;; ================= Real Vector Engines ========================================
 
-(defmacro real-vector-blas* [name t ptr cast blas lapack blas-layout ones]
+(defmacro real-vector-blas* [name t ptr cast blas lapack ones]
   `(extend-type ~name
      Blas
      (swap [this# x# y#]
@@ -151,7 +157,8 @@
      (iamin [this# x#]
        (. ~blas ~(cblas 'cblas_i t 'amin) (dim x#) (~ptr x#) (stride x#)))
      (rot [this# x# y# c# s#]
-       (. ~blas ~(cblas t 'rot) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~cast c#) (~cast s#)))
+       (. ~blas ~(cblas t 'rot) (dim x#)
+          (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~cast c#) (~cast s#)))
      (rotg [this# abcs#]
        (check-stride abcs#)
        (. ~blas ~(cblas t 'rotg) (~ptr abcs#) (~ptr abcs# 1) (~ptr abcs# 2) (~ptr abcs# 3))
@@ -160,7 +167,8 @@
        (. ~blas ~(cblas t 'rotm) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~ptr param#)))
      (rotmg [this# d1d2xy# param#]
        (check-stride d1d2xy# param#)
-       (. ~blas ~(cblas t 'rotmg) (~ptr d1d2xy#) (~ptr d1d2xy# 1) (~ptr d1d2xy# 2) (~cast (entry d1d2xy# 3)) (~ptr param#)))
+       (. ~blas ~(cblas t 'rotmg)
+          (~ptr d1d2xy#) (~ptr d1d2xy# 1) (~ptr d1d2xy# 2) (~cast (entry d1d2xy# 3)) (~ptr param#)))
      (scal [this# alpha# x#]
        (. ~blas ~(cblas t 'scal) (dim x#) (~cast alpha#) (~ptr x#) (stride x#))
        x#)
@@ -183,12 +191,12 @@
        (vector-imin x#))
      (set-all [this# alpha# x#]
        (with-lapack-check
-         (. ~lapack ~(lapacke t 'laset) (int ~(:row blas-layout)) ~(byte (int \g)) (dim x#) 1
+         (. ~lapack ~(lapacke t 'laset) ~(int (:row blas-layout)) ~(byte (int \g)) (dim x#) 1
             (~cast alpha#) (~cast alpha#) (~ptr x#) (stride x#)))
        x#)
-     (axpby [this# alpha# x# beta# y#] ;; TODO axpby will be available in JavaCPP 1.5.9
-       (. ~blas ~(cblas t 'scal) (dim y#) (~cast beta#) (~ptr y#) (stride y#))
-       (. ~blas ~(cblas t 'axpy) (dim x#) (~cast alpha#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
+     (axpby [this# alpha# x# beta# y#]
+       (. ~blas ~(cblas t 'axpby) (dim x#)
+          (~cast alpha#) (~ptr x#) (stride x#) (~cast beta#) (~ptr y#) (stride y#))
        y#)
      Lapack
      (srt [this# x# increasing#]
@@ -237,124 +245,124 @@
 (defmacro real-vector-math* [name t ptr cast]
   `(extend-type ~name
      VectorMath
-     (sqr [this# a# y#]
+     (sqr [_# a# y#]
        (vector-math ~(math t 'Sqr) ~ptr a# y#))
-     (mul [this# a# b# y#]
+     (mul [_# a# b# y#]
        (vector-math ~(math t 'Mul) ~ptr a# b# y#))
-     (div [this# a# b# y#]
+     (div [_# a# b# y#]
        (vector-math ~(math t 'Div) ~ptr a# b# y#))
-     (inv [this# a# y#]
+     (inv [_# a# y#]
        (vector-math ~(math t 'Inv) ~ptr a# y#))
-     (abs [this# a# y#]
+     (abs [_# a# y#]
        (vector-math ~(math t 'Abs) ~ptr a# y#))
-     (linear-frac [this# a# b# scalea# shifta# scaleb# shiftb# y#]
+     (linear-frac [_# a# b# scalea# shifta# scaleb# shiftb# y#]
        (check-stride a# b# y#)
        (. mkl_rt ~(math t 'LinearFrac) (dim a#) (~ptr a#) (~ptr b#)
           (~cast scalea#) (~cast shifta#) (~cast scaleb#) (~cast shiftb#) (~ptr y#))
        y#)
-     (fmod [this# a# b# y#]
+     (fmod [_# a# b# y#]
        (vector-math ~(math t 'Fmod) ~ptr a# b# y#))
-     (frem [this# a# b# y#]
+     (frem [_# a# b# y#]
        (vector-math  ~(math t 'Remainder) ~ptr a# b# y#))
-     (sqrt [this# a# y#]
+     (sqrt [_# a# y#]
        (vector-math ~(math t 'Sqrt) ~ptr a# y#))
-     (inv-sqrt [this# a# y#]
+     (inv-sqrt [_# a# y#]
        (vector-math ~(math t 'InvSqrt) ~ptr a# y#))
-     (cbrt [this# a# y#]
+     (cbrt [_# a# y#]
        (vector-math ~(math t 'Cbrt) ~ptr a# y#))
-     (inv-cbrt [this# a# y#]
+     (inv-cbrt [_# a# y#]
        (vector-math ~(math t 'InvCbrt) ~ptr a# y#))
-     (pow2o3 [this# a# y#]
+     (pow2o3 [_# a# y#]
        (vector-math ~(math t 'Pow2o3) ~ptr a# y#))
-     (pow3o2 [this# a# y#]
+     (pow3o2 [_# a# y#]
        (vector-math ~(math t 'Pow3o2) ~ptr a# y#))
-     (pow [this# a# b# y#]
+     (pow [_# a# b# y#]
        (vector-math ~(math t 'Pow) ~ptr a# b# y#))
-     (powx [this# a# b# y#]
+     (powx [_# a# b# y#]
        (check-stride a# y#)
        (. mkl_rt ~(math t 'Powx) (dim a#) (~ptr a#) (~cast b#) (~ptr y#))
        y#)
-     (hypot [this# a# b# y#]
+     (hypot [_# a# b# y#]
        (vector-math ~(math t 'Hypot) ~ptr a# b# y#))
-     (exp [this# a# y#]
+     (exp [_# a# y#]
        (vector-math ~(math t 'Exp) ~ptr a# y#))
-     (exp2 [this# a# y#]
+     (exp2 [_# a# y#]
        (vector-math ~(math t 'Exp2) ~ptr a# y#))
-     (exp10 [this# a# y#]
+     (exp10 [_# a# y#]
        (vector-math ~(math t 'Exp10) ~ptr a# y#))
-     (expm1 [this# a# y#]
+     (expm1 [_# a# y#]
        (vector-math ~(math t 'Expm1) ~ptr a# y#))
-     (log [this# a# y#]
+     (log [_# a# y#]
        (vector-math ~(math t 'Ln) ~ptr a# y#))
-     (log2 [this# a# y#]
+     (log2 [_# a# y#]
        (vector-math ~(math t 'Log2) ~ptr a# y#))
-     (log10 [this# a# y#]
+     (log10 [_# a# y#]
        (vector-math ~(math t 'Log10) ~ptr a# y#))
-     (log1p [this# a# y#]
+     (log1p [_# a# y#]
        (vector-math ~(math t 'Log1p) ~ptr a# y#))
-     (sin [this# a# y#]
+     (sin [_# a# y#]
        (vector-math ~(math t 'Sin) ~ptr a# y#))
-     (cos [this# a# y#]
+     (cos [_# a# y#]
        (vector-math ~(math t 'Cos) ~ptr a# y#))
-     (tan [this# a# y#]
+     (tan [_# a# y#]
        (vector-math ~(math t 'Tan) ~ptr a# y#))
-     (sincos [this# a# y# z#]
+     (sincos [_# a# y# z#]
        (vector-math ~(math t 'SinCos) ~ptr a# y# z#))
-     (asin [this# a# y#]
+     (asin [_# a# y#]
        (vector-math ~(math t 'Asin) ~ptr a# y#))
-     (acos [this# a# y#]
+     (acos [_# a# y#]
        (vector-math ~(math t 'Acos) ~ptr a# y#))
-     (atan [this# a# y#]
+     (atan [_# a# y#]
        (vector-math ~(math t 'Atan) ~ptr a# y#))
-     (atan2 [this# a# b# y#]
+     (atan2 [_# a# b# y#]
        (vector-math ~(math t 'Atan2) ~ptr a# b# y#))
-     (sinh [this# a# y#]
+     (sinh [_# a# y#]
        (vector-math ~(math t 'Sinh) ~ptr a# y#))
-     (cosh [this# a# y#]
+     (cosh [_# a# y#]
        (vector-math ~(math t 'Cosh) ~ptr a# y#))
-     (tanh [this# a# y#]
+     (tanh [_# a# y#]
        (vector-math ~(math t 'Tanh) ~ptr a# y#))
-     (asinh [this# a# y#]
+     (asinh [_# a# y#]
        (vector-math ~(math t 'Asinh) ~ptr a# y#))
-     (acosh [this# a# y#]
+     (acosh [_# a# y#]
        (vector-math ~(math t 'Acosh) ~ptr a# y#))
-     (atanh [this# a# y#]
+     (atanh [_# a# y#]
        (vector-math ~(math t 'Atanh) ~ptr a# y#))
-     (erf [this# a# y#]
+     (erf [_# a# y#]
        (vector-math ~(math t 'Erf) ~ptr a# y#))
-     (erfc [this# a# y#]
+     (erfc [_# a# y#]
        (vector-math ~(math t 'Erfc) ~ptr a# y#))
-     (erf-inv [this# a# y#]
+     (erf-inv [_# a# y#]
        (vector-math ~(math t 'ErfInv) ~ptr a# y#))
-     (erfc-inv [this# a# y#]
+     (erfc-inv [_# a# y#]
        (vector-math ~(math t 'ErfcInv) ~ptr a# y#))
-     (cdf-norm [this# a# y#]
+     (cdf-norm [_# a# y#]
        (vector-math ~(math t 'CdfNorm) ~ptr a# y#))
-     (cdf-norm-inv [this# a# y#]
+     (cdf-norm-inv [_# a# y#]
        (vector-math ~(math t 'CdfNormInv) ~ptr a# y#))
-     (gamma [this# a# y#]
+     (gamma [_# a# y#]
        (vector-math ~(math t 'TGamma) ~ptr a# y#))
-     (lgamma [this# a# y#]
+     (lgamma [_# a# y#]
        (vector-math ~(math t 'LGamma) ~ptr a# y#))
-     (expint1 [this# a# y#]
+     (expint1 [_# a# y#]
        (vector-math ~(math t 'ExpInt1) ~ptr a# y#))
-     (floor [this# a# y#]
+     (floor [_# a# y#]
        (vector-math ~(math t 'Floor) ~ptr a# y#))
-     (fceil [this# a# y#]
+     (fceil [_# a# y#]
        (vector-math ~(math t 'Ceil) ~ptr a# y#))
-     (trunc [this# a# y#]
+     (trunc [_# a# y#]
        (vector-math ~(math t 'Trunc) ~ptr a# y#))
-     (round [this# a# y#]
+     (round [_# a# y#]
        (vector-math ~(math t 'Round) ~ptr a# y#))
-     (modf [this# a# y# z#]
+     (modf [_# a# y# z#]
        (vector-math ~(math t 'Modf) ~ptr a# y# z#))
-     (frac [this# a# y#]
+     (frac [_# a# y#]
        (vector-math ~(math t 'Frac) ~ptr a# y#))
-     (fmin [this# a# b# y#]
+     (fmin [_# a# b# y#]
        (vector-math ~(math t 'Fmin) ~ptr a# b# y#))
-     (fmax [this# a# b# y#]
+     (fmax [_# a# b# y#]
        (vector-math ~(math t 'Fmax) ~ptr a# b# y#))
-     (copy-sign [this# a# b# y#]
+     (copy-sign [_# a# b# y#]
        (vector-math ~(math t 'CopySign) ~ptr a# b# y#))
      (sigmoid [this# a# y#]
        (sigmoid-over-tanh this# a# y#))
@@ -387,7 +395,7 @@
                                               (doto (double-pointer 1) (put! 0 1.0)) 1 0))
 
 (deftype FloatVectorEngine [])
-(real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt mkl-blas-layout ones-float)
+(real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-vector-math* FloatVectorEngine "s" float-ptr float)
 
 (extend-type FloatVectorEngine
@@ -399,7 +407,7 @@
       (float-gaussian (or rng-stream default-rng-stream) mu sigma x))))
 
 (deftype DoubleVectorEngine [])
-(real-vector-blas* DoubleVectorEngine "d" double-ptr double mkl_rt mkl_rt mkl-blas-layout ones-double)
+(real-vector-blas* DoubleVectorEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
 (real-vector-math* DoubleVectorEngine "d" double-ptr double)
 
 (extend-type DoubleVectorEngine
@@ -417,6 +425,137 @@
 (deftype IntVectorEngine [])
 (integer-vector-blas* IntVectorEngine "s" coerce-float-ptr mkl_rt)
 (integer-vector-blas-plus* IntVectorEngine "s" float coerce-float-ptr mkl_rt mkl_rt)
+
+;; ================= Real GE Engine ========================================
+
+(defmacro ge-axpby [blas method ptr alpha a beta b]
+  `(if (< 0 (dim ~a))
+     (let [nav-b# (navigator ~b)]
+       (. ~blas ~method (byte (int (if (.isColumnMajor nav-b#) \C \R)))
+          (byte (int (if (= (navigator ~a) nav-b#) \n \t))) ~(byte (int \n)) (mrows ~b) (ncols ~b)
+          ~alpha (~ptr ~a) (stride ~a) ~beta (~ptr ~b) (stride ~b)
+          (~ptr ~b) (stride ~b))
+       ~b)
+     ~b))
+
+(defmacro real-ge-blas* [name t ptr cast blas lapack ones]
+  `(extend-type ~name
+     Blas
+     (swap [_# a# b#]
+       (ge-map ~blas ~(cblas t 'swap) ~ptr a# b#)
+       a#)
+     (copy [_# a# b#]
+       (when (< 0 (dim a#))
+         (let [stor-b# (full-storage b#)
+               no-trans# (= (navigator a#) (navigator b#))]
+           (. ~blas ~(cblas "mkl_" t 'omatcopy) ~(byte (int \C)) (byte (int (if no-trans# \N \T)))
+              (if no-trans# (.sd stor-b#) (.fd stor-b#)) (if no-trans# (.fd stor-b#) (.sd stor-b#))
+              1.0 (~ptr a#) (stride a#) (~ptr b#) (.ld stor-b#))))
+       b#)
+     (dot [_# a# b#]
+       (ge-reduce ~blas ~(cblas t 'dot) ~ptr 0.0 a# b#))
+     (nrm1 [_# x#]
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \O)) a))
+     (nrm2 [_# x#]
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \F)) a))
+     (nrmi [_# x#]
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \I)) a))
+     (asum [_# a#]
+       (if (< 0 (dim a#))
+         (let [buff# (~ptr a# 0)]
+           (if (.isGapless (storage a#))
+             (. ~blas ~(cblas t 'asum) (dim a#) (~ptr a#) 1)
+             (accu-layout a# len# idx# acc# 0.0
+                          (+ acc# (. ~blas ~(cblas t 'asum) len# (.position buff# idx#) 1)))))
+         0.0))
+     (scal [_# alpha# a#]
+       (when (< 0 (dim a#))
+         (let [stor# (full-storage a#)]
+           (. ~blas ~(cblas "mkl_" t 'imatcopy) ~(byte (int \c)) ~(byte (int \n))
+              (.sd stor#) (.fd stor#) (~cast alpha#) (~ptr a#) (.ld stor#) (.ld stor#))))
+       a#)
+     (axpy [_# alpha# a# b#]
+       (ge-axpby ~blas ~(cblas "mkl_" t 'omatadd) ~ptr (~cast alpha#) a# 1.0 b#)
+       b#)
+     (mv
+       ([_# alpha# a# x# beta# y#]
+        (. ~blas ~(cblas t 'gemv) (.layout (navigator a#)) ~(:no-trans blas-transpose) (mrows a#) (ncols a#)
+           (~cast alpha#) (~ptr a#) (stride a#) (~ptr x#) (stride x#) (~cast beta#) (~ptr y#) (stride y#))
+        y#)
+       ([_# a# _#]
+        (dragan-says-ex "In-place mv! is not supported for GE matrices." {:a (info a#)})))
+     (rk [_# alpha# x# y# a#]
+       (. ~blas ~(cblas t 'ger) (.layout (navigator a#)) (mrows a) (ncols a#)
+          (~cast alpha#) (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~ptr a#) (stride a#))
+       a#)
+     (mm
+       ([_# alpha# a# b# _#]
+        (if-not (instance? GEMatrix b#)
+          (mm (engine b#) alpha# b# a# false)
+          (dragan-says-ex "In-place mm! is not supported for GE matrices. Use QR factorization."
+                          {:a (info a#) :b (info b#)} )))
+       ([_# alpha# a# b# beta# c# _#]
+        (if (instance? GEMatrix b#)
+          (let [nav# (navigator c#)]
+            (. ~blas ~(cblas t 'gemm) (.layout nav#)
+               (if (= nav# (navigator a#)) ~(:no-trans blas-transpose) ~(:trans blas-transpose))
+               (if (= nav# (navigator b#)) ~(:no-trans blas-transpose) ~(:trans blas-transpose))
+               (mrows a#) (ncols b#) (ncols a#) (~cast alpha#) (~ptr a#) (stride a#)
+               (~ptr b#) (stride b#) (~cast beta#) (~ptr c#) (stride c#))
+            c#)
+          (mm (engine b#) (~cast alpha#) b# a# (~cast beta#) c# false))))))
+
+(defmacro real-ge-blas-plus* [name t ptr cast blas lapack ones]
+  `(extend-type ~name
+     BlasPlus
+     (amax [_# a#]
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \M)) a))
+     (sum [_# a#]
+       (if (< 0 (dim a#))
+         (if (.isGapless (storage a#))
+           (. ~blas ~(cblas t 'dot) (dim a#) (~ptr a#) 1 (~ptr ~ones) 0)
+           (let [buff# (~ptr a# 0)
+                 ones# (~ptr ~ones)]
+             (accu-layout a# len# idx# acc# 0.0
+                          (+ acc# (double (. ~blas ~(cblas t 'dot) len# (.position buff# idx#) 1 ones# 0))))))
+         0.0))
+     (set-all [_# alpha# a#]
+       (with-lapack-check
+         (. ~lapack ~(lapacke t 'laset) (.layout (navigator a#)) ~(byte (int \g))
+          (mrows a#) (ncols a#) (~cast alpha#) (~cast alpha#) (~ptr a#) (stride a#)))
+       a#)
+     (axpby [_# alpha# a# beta# b#]
+       (ge-axpby ~blas ~(cblas "mkl_" t 'omatadd) ~ptr (~cast alpha#) a# (~cast beta#) b#)
+       b#)
+     Lapack
+     (srt [_# a# increasing#]
+       (let [incr# (byte (int (if increasing# \I \D)))
+             buff# (~ptr a# 0)]
+         (dostripe-layout a# len# idx#
+                          (with-lapack-check
+                            (. ~lapack ~(lapacke t 'lasrt) incr# len# (.position buff# idx#)))))
+       a#)))
+
+(defmacro real-ge-lapack* [name t ptr cast lapack]
+  `(extend-type ~name
+     Lapack
+     (srt [_# a# increasing#]
+       (let [incr# (byte (int (if increasing# \I \D)))
+             buff# (~ptr a# 0)]
+         (dostripe-layout a# len# idx#
+                          (with-lapack-check
+                            (. ~lapack ~(lapacke t 'lasrt) incr# len# (.position buff# idx#)))))
+       a#)))
+
+(deftype FloatGEEngine [])
+(real-ge-blas* FloatGEEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
+(real-ge-blas-plus* FloatGEEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
+(real-ge-lapack* FloatGEEngine "s" float-ptr float mkl_rt)
+
+(deftype DoubleGEEngine [])
+(real-ge-blas* DoubleGEEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
+(real-ge-blas-plus* DoubleGEEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
+(real-ge-lapack* DoubleGEEngine "d" double-ptr double mkl_rt)
 
 ;; ========================= Sparse Vector engines ============================================
 
@@ -489,9 +628,13 @@
      (set-all [this# alpha# x#]
        (set-all (engine (entries x#)) alpha# (entries x#))
        x#)
-     (axpby [this# alpha# x# beta# y#] ;; TODO axpby will be available in JavaCPP 1.5.9
-       (scal (engine y#) beta# (entries y#))
-       (axpy this# alpha# x# y#)
+     (axpby [this# alpha# x# beta# y#]
+       (if (= 1.0 beta#)
+         (axpy this# alpha# x# y#)
+         (if (indices y#)
+           (axpby (engine (entries x#)) alpha# (entries x#) beta# (entries y#))
+           (do (scal (engine y#) beta# (entries y#))
+               (axpy this# alpha# x# y#))))
        y#)))
 
 (defmacro real-cs-vector-sparse-blas* [name t ptr idx-ptr blas]
@@ -512,7 +655,7 @@
 (real-cs-vector-sparse-blas* DoubleCSVectorEngine "d" double-ptr int-ptr mkl_rt)
 
 (deftype MKLRealFactory [index-fact ^DataAccessor da
-                         vector-eng cs-vector-eng]
+                         vector-eng ge-eng cs-vector-eng]
   DataAccessorProvider
   (data-accessor [_]
     da)
@@ -535,8 +678,15 @@
       (when init
         (.initialize da (.buffer ^Block res)))
       res))
+  (create-ge [this m n column? init]
+    (let-release [res (real-ge-matrix this m n column?)]
+      (when init
+        (.initialize da (.buffer ^Block res)))
+      res))
   (vector-engine [_]
     vector-eng)
+  (ge-engine [_]
+    ge-eng)
   SparseFactory
   (cs-vector-engine [_]
     cs-vector-eng)
@@ -578,8 +728,8 @@
 
 (def mkl-float
   (->MKLRealFactory mkl-int float-accessor
-                    (->FloatVectorEngine) (->FloatCSVectorEngine)))
+                    (->FloatVectorEngine) (->FloatGEEngine) (->FloatCSVectorEngine)))
 
 (def mkl-double
   (->MKLRealFactory mkl-int double-accessor
-                    (->DoubleVectorEngine) (->DoubleCSVectorEngine)))
+                    (->DoubleVectorEngine) (->DoubleGEEngine) (->DoubleCSVectorEngine)))

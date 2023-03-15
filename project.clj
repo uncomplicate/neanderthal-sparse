@@ -15,7 +15,7 @@
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [org.uncomplicate/clojure-cpp "0.1.0-SNAPSHOT"]
                  [uncomplicate/neanderthal "0.46.0"]
-                 [org.bytedeco/mkl "2022.2-1.5.8"]]
+                 [org.bytedeco/mkl "2022.2-1.5.9-SNAPSHOT"]]
 
   :profiles {:dev {:plugins [[lein-midje "3.2.1"]
                              [lein-codox "0.10.7"]]
@@ -25,13 +25,14 @@
                                  *unchecked-math* :warn-on-boxed
                                  *print-length* 128}
                    :dependencies [[midje "1.10.9"]
-                                  [org.bytedeco/mkl-platform "2022.2-1.5.8"]]
+                                  [org.bytedeco/mkl-platform "2022.2-1.5.9-SNAPSHOT"]]
 
                    :jvm-opts ^:replace ["-Dclojure.compiler.direct-linking=true"
                                         "-XX:MaxDirectMemorySize=16g" "-XX:+UseLargePages"
                                         "--add-opens=java.base/jdk.internal.ref=ALL-UNNAMED"
                                         "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]}}
 
+  :repositories [["snapshots" "https://oss.sonatype.org/content/repositories/snapshots"]]
   :codox {:metadata {:doc/format :markdown}
           :src-dir-uri "http://github.com/uncomplicate/neanderthal-sparse/blob/master/"
           :src-linenum-anchor-prefix "L"

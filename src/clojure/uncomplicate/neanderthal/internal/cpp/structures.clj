@@ -22,10 +22,11 @@
     [core :refer [transfer! copy! dim subvector vctr ge]]
     [real :refer [entry entry!]]
     [math :refer [ceil]]
-    [block :refer [entry-type offset stride]]]
+    [block :refer [entry-type offset stride buffer column?]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [printing :refer [print-vector print-ge print-uplo print-banded print-diagonal]]
+    [common :refer [dense-rows dense-cols dense-dias require-trf]]
     [navigation :refer :all]])
   (:import [java.nio Buffer ByteBuffer]
            [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
@@ -39,52 +40,17 @@
             FullStorage LayoutNavigator RealLayoutNavigator Region MatrixImplementation GEMatrix
             UploMatrix BandedMatrix PackedMatrix DiagonalMatrix]))
 
-(declare real-block-vector integer-block-vector cs-vector)
+(declare real-block-vector integer-block-vector cs-vector real-ge-matrix)
 
-;; ================ from buffer-block ====================================
-(defn ^:private vector-seq [^Vector vector ^long i]
-  (lazy-seq
-   (if (< -1 i (.dim vector))
-     (cons (.boxedEntry vector i) (vector-seq vector (inc i)))
-     '())))
-
-(defmacro ^:private transfer-vector-vector [source destination]
-  `(do
-     (if (compatible? ~source ~destination)
-       (when-not (identical? ~source ~destination)
-         (let [n# (min (.dim ~source) (.dim ~destination))]
-           (subcopy (engine ~source) ~source ~destination 0 n# 0)))
-       (dotimes [i# (min (.dim ~source) (.dim ~destination))]
-         (.set ~destination i# (.entry ~source i#))))
-     ~destination))
-
-(defmacro ^:private transfer-vector-array [source destination]
-  `(let [n# (min (.dim ~source) (alength ~destination))]
-     (dotimes [i# n#]
-       (aset ~destination i# (.entry ~source i#)))
-     ~destination))
-
-(defmacro ^:private transfer-array-vector [source destination]
-  `(let [n# (min (alength ~source) (.dim ~destination))]
-     (dotimes [i# n#]
-       (.set ~destination i# (aget ~source i#)))
-     ~destination))
-
-(defmacro ^:private transfer-seq-vector [source destination]
-  `(let [n# (.dim ~destination)]
-     (loop [i# 0 src# (seq ~source)]
-       (when (and src# (< i# n#))
-         (.set ~destination i# (first src#))
-         (recur (inc i#) (next src#))))
-     ~destination))
-
-;; =======================================================================
 
 ;; ================ Pointer data accessors  ====================================
 
-(definterface RealAccessor ;;TODO move to API
+(definterface RealAccessor ;;TODO move to API. Replace RealBufferAccessor, since there's no need to specify Buffer.
   (get ^double [p ^long i])
   (set ^double [p ^long i ^double val]))
+
+(defn real-accessor ^RealAccessor [provider]
+  (data-accessor provider))
 
 (definterface IntegerAccessor ;;TODO move to API
   (get ^long [p ^long i])
@@ -138,6 +104,64 @@
 
 ;; =======================================================================
 
+;; ================ from buffer-block ====================================
+(defn ^:private vector-seq [^Vector vector ^long i]
+  (lazy-seq
+   (if (< -1 i (.dim vector))
+     (cons (.boxedEntry vector i) (vector-seq vector (inc i)))
+     '())))
+
+(defmacro ^:private transfer-vector-vector [source destination]
+  `(do
+     (if (compatible? ~source ~destination)
+       (when-not (identical? ~source ~destination)
+         (let [n# (min (.dim ~source) (.dim ~destination))]
+           (subcopy (engine ~source) ~source ~destination 0 n# 0)))
+       (dotimes [i# (min (.dim ~source) (.dim ~destination))]
+         (.set ~destination i# (.entry ~source i#))))
+     ~destination))
+
+(defmacro ^:private transfer-vector-array [source destination]
+  `(let [n# (min (.dim ~source) (alength ~destination))]
+     (dotimes [i# n#]
+       (aset ~destination i# (.entry ~source i#)))
+     ~destination))
+
+(defmacro ^:private transfer-array-vector [source destination]
+  `(let [n# (min (alength ~source) (.dim ~destination))]
+     (dotimes [i# n#]
+       (.set ~destination i# (aget ~source i#)))
+     ~destination))
+
+(defmacro ^:private transfer-seq-vector [source destination]
+  `(let [n# (.dim ~destination)]
+     (loop [i# 0 src# (seq ~source)]
+       (when (and src# (< i# n#))
+         (.set ~destination i# (first src#))
+         (recur (inc i#) (next src#))))
+     ~destination))
+
+(defmacro ^:private transfer-seq-matrix [typed-accessor source destination]
+  `(if (sequential? (first ~source))
+     (let [n# (.fd (storage ~destination))
+           nav# (navigator ~destination)
+           transfer-method# (get-method transfer!
+                                        [(type (first ~source))
+                                         (type (.stripe nav# ~destination 0))])]
+       (loop [i# 0 s# ~source]
+         (if (and s# (< i# n#))
+           (do
+             (transfer-method# (first s#) (.stripe nav# ~destination i#))
+             (recur (inc i#) (next s#)))
+           ~destination)))
+     (let [da# (~typed-accessor ~destination)
+           buf# (.buffer ~destination)
+           ofst# (.offset ~destination)]
+       (doseq-layout ~destination i# j# idx# ~source e# (.set da# buf# (+ ofst# idx#) e#))
+       ~destination)))
+
+;; =======================================================================
+
 (defn block-vector
   ([constructor fact master buf-ptr n ofst strd]
    (let [da (data-accessor fact)]
@@ -152,6 +176,27 @@
   ([constructor fact n]
    (block-vector constructor fact n 1)))
 
+;; TODO move to general namespace
+(defmacro extend-base [name]
+  `(extend-type ~name
+     Releaseable
+     (release [this#]
+       (if (.-master this#) (release (.-buf-ptr this#)) true))
+     EngineProvider
+     (engine [this#]
+       (.-eng this#))
+     FactoryProvider
+     (factory [this#]
+       (.-fact this#))
+     (native-factory [this#]
+       (native-factory (.-fact this#)))
+     (index-factory [this#]
+       (index-factory (.-fact this#)))
+     DataAccessorProvider
+     (data-accessor [this#]
+       (.-da this#))))
+
+;; TODO extract general cpu/gpu parts to a more general macro
 (defmacro extend-block-vector [name block-vector]
   `(extend-type ~name
      Info
@@ -175,9 +220,6 @@
          :master (.-master this#)
          :engine (info (.-eng this#))
          nil))
-     Releaseable
-     (release [this#]
-       (if (.-master this#) (release (.-buf-ptr this#)) true))
      Container
      (raw
        ([this#]
@@ -186,7 +228,7 @@
         (create-vector (factory fact#) (.-n this#) false)))
      (zero
        ([this#]
-        (~block-vector (.-fact this#) (.-n this#)))
+        (create-vector (.-fact this#) (.-n this#) true))
        ([this# fact#]
         (create-vector (factory fact#) (.-n this#) true)))
      (host [this#]
@@ -211,28 +253,16 @@
        (= (.-n this#) (dim y#)))
      (device [_#]
        :cpu)
-     EngineProvider
-     (engine [this#]
-       (.-eng this#))
-     FactoryProvider
-     (factory [this#]
-       (.-fact this#))
-     (native-factory [this#]
-       (native-factory (.-fact this#)))
-     (index-factory [this#]
-       (index-factory (.-fact this#)))
-     DataAccessorProvider
-     (data-accessor [this#]
-       (.-da this#))
      Monoid
      (id [this#]
        (~block-vector (.-fact this#) 0))
      Applicative
-     (pure [this# v#]
-       (let-release [res# (~block-vector (.-fact this#) 1)]
-         (uncomplicate.neanderthal.core/entry! res# 0 v#)))
-     (pure [this# v# vs#]
-       (vctr (.-fact this#) (cons v# vs#)))))
+     (pure
+       ([this# v#]
+        (let-release [res# (~block-vector (.-fact this#) 1)]
+          (uncomplicate.neanderthal.core/entry! res# 0 v#)))
+       ([this# v# vs#]
+        (vctr (.-fact this#) (cons v# vs#))))))
 
 ;; ============ Integer Vector ====================================================
 
@@ -311,6 +341,7 @@
   (subvector [_ k l]
     (integer-block-vector fact false buf-ptr l (* k strd) strd)))
 
+(extend-base IntegerBlockVector)
 (extend-block-vector IntegerBlockVector integer-block-vector)
 
 (def integer-block-vector (partial block-vector ->IntegerBlockVector))
@@ -442,6 +473,7 @@
   (subvector [_ k l]
     (real-block-vector fact false buf-ptr l (* k strd) strd)))
 
+(extend-base RealBlockVector)
 (extend-block-vector RealBlockVector real-block-vector)
 
 (def real-block-vector (partial block-vector ->RealBlockVector))
@@ -649,14 +681,277 @@
 
 (defmethod transfer! [CSVector (Class/forName "[D")]
   [source destination]
-  (transfer! source (entries destination)))
+  (transfer! (entries source) destination))
 
 (defmethod transfer! [CSVector (Class/forName "[F")]
   [source destination]
-  (transfer! source (entries destination)))
+  (transfer! (entries source) destination))
 
-;;TODO handle different types (float/double...)
+;;TODO handle heterogenous types (float/double...)
 (defmethod transfer! [RealBlockVector CSVector]
   [^RealBlockVector source ^CSVector destination]
   (gthr (engine destination) source destination)
   destination)
+
+;; =================== Matrices ================================================
+
+(defmacro extend-ge-matrix [name ge-matrix]
+  `(extend-type ~name
+     Info
+     (info [this#]
+       {:entry-type (.entryType (data-accessor this#))
+        :class ~name
+        :device :cpu
+        :matrix-type :ge
+        :dim (dim this#)
+        :m (.-m this#)
+        :n (.-n this#)
+        :offset (offset this#)
+        :stride (stride this#)
+        :master (.-master this#)
+        :layout (:layout (info (.-nav this#)))
+        :storage (info (.-nav this#))
+        :region (info (.-reg this#))
+        :engine (info (.-eng this#))})
+     (info [this# info-type#]
+       (case info-type#
+         :entry-type (.entryType (data-accessor this#))
+         :class ~name
+         :device :cpu
+         :matrix-type :ge
+         :dim (dim this#)
+         :m (.-m this#)
+         :n (.-n this#)
+         :offset (offset this#)
+         :stride (stride this#)
+         :master (.-master this#)
+         :layout (:layout (info (.-nav this#)))
+         :storage (info (.-nav this#))
+         :region (info (.-reg this#))
+         :engine (info (.-eng this#))
+         nil))
+     Navigable
+     (navigator [this#]
+       (.-nav this#))
+     (storage [this#]
+       (.-stor this#))
+     (region [this#]
+       (.-reg this#))
+     Container
+     (raw
+       ([this#]
+        (~ge-matrix (.-fact this#) (.-m this#) (.-n this#) (.-nav this#) (.-stor this#) (.-reg this#)))
+       ([this# fact#]
+        (create-ge (factory fact#) (.-m this#) (.-n this#) (column? (.-nav this#)) false)))
+     (zero
+       ([this#]
+        (create-ge (.-fact this#) (.-m this#) (.-n this#) (column? (.-nav this#)) true))
+       ([this# fact#]
+        (create-ge (factory fact#) (.-m this#) (.-n this#) (column? (.-nav this#)) true)))
+     (host [this#]
+       (let-release [res# (raw this#)]
+         (copy (.-eng this#) this# res#)))
+     (native [this#]
+       this#)
+     Viewable
+     (view [this#]
+       (~ge-matrix (.-fact this#) false (.-buf-ptr this#) (.-m this#) (.-n this#) (.-nav this#) (.-stor this#) (.-reg this#)))
+     DenseContainer ;;TODO implement all view-* functions
+     (view-ge
+       ([this#]
+        this#)
+       ([this# stride-mult#]
+        (let [shrinked# (ceil (/ (.invokePrim this#) (long stride-mult#)))
+              column-major# (column? (.-nav this#))
+              [m# n#] (if column-major# [(.m this#) shrinked#] [shrinked# (.-n this#)])]
+          (~ge-matrix (.-fact this#) false (.-buf-ptr this#) m# n# (.-nav this#)
+           (full-storage column-major# m# n# (* (long stride-mult#) (stride this#)))
+           (ge-region m# n#))))
+       ([this# m# n#]
+        (if (.isContiguous this#)
+          (~ge-matrix (.-fact this#) false (.-buf-ptr this#) m# n# (.-nav this#)
+           (full-storage (column? (.-nav this#)) m# n#) (ge-region m# n#))
+          (throw (ex-info "Strided GE matrix cannot be viewed through different dimensions." {:a (info this#)})))))
+     MemoryContext
+     (compatible? [this# y#]
+       (compatible? (.-da this#) y#))
+     (fits? [this# b#]
+       (and (instance? GEMatrix b#) (= (.-reg this#) (region b#))))
+     (device [this#]
+       :cpu)
+     Monoid
+     (id [this#]
+       (~ge-matrix (.-fact this#) 0 0 (column? (.-nav this#))))
+     Applicative
+     (pure
+       ([this# v#]
+        (let-release [res# (~ge-matrix (.-fact this#) 1 1 (column? (.-nav this#)))]
+          (uncomplicate.neanderthal.core/entry! res# 0 0 v#)))
+       ([this# v# vs#]
+        (ge (.-fact this#) (cons v# vs#))))))
+
+(defmacro extend-ge-trf [name]
+  `(extend-type ~name
+     Triangularizable
+     (create-trf [a# pure#]
+       (lu-factorization a pure))
+     (create-ptrf [a#]
+       (dragan-says-ex "Pivotless factorization is not available for GE matrices."))
+     TRF
+     (trtrs! [a# b#]
+       (require-trf))
+     (trtrs [a# b#]
+       (require-trf))
+     (trtri! [a#]
+       (require-trf))
+     (trtri [a#]
+       (require-trf))
+     (trcon
+       ([a# nrm# nrm1?#]
+        (require-trf))
+       ([a# nrm1?#]
+        (require-trf)))
+     (trdet [a#]
+       (require-trf))))
+
+;; =================== Real Matrix =============================================
+
+(defn matrix-equals [^RealNativeMatrix a ^RealNativeMatrix b]
+  (or (identical? a b) (= (.buffer a) (.buffer b))
+      (and (instance? (class a) b)
+           (= (.matrixType ^MatrixImplementation a) (.matrixType ^MatrixImplementation b))
+           (compatible? a b) (= (.mrows a) (.mrows b)) (= (.ncols a) (.ncols b))
+           (let [nav (real-navigator a)
+                 da ^RealAccessor (data-accessor a)
+                 buf (.buffer a)]
+             (and-layout a i j idx (= (.get da buf idx) (.get nav b i j)))))))
+
+(deftype RealGEMatrix [^RealLayoutNavigator nav ^FullStorage stor ^Region reg
+                       fact ^RealAccessor da eng master
+                       buf-ptr ^long m ^long n]
+  Object
+  (hashCode [a]
+    (-> (hash :RealGEMatrix) (hash-combine m) (hash-combine n) (hash-combine (nrm2 eng a))))
+  (equals [a b]
+    (matrix-equals a b))
+  (toString [a]
+    (format "#RealGEMatrix[%s, mxn:%dx%d, layout%s]"
+            (entry-type da) m n (dec-property (.layout nav))))
+  GEMatrix
+  (matrixType [_]
+    :ge)
+  (isTriangular [_]
+    false)
+  (isSymmetric [_]
+    false)
+  Seqable
+  (seq [a]
+    (map #(seq (.stripe nav a %)) (range 0 (.fd stor))))
+  IFn$LLDD
+  (invokePrim [a i j v]
+    (entry! a i j v))
+  IFn$LLD
+  (invokePrim [a i j]
+    (entry a i j))
+  IFn
+  (invoke [a i j v]
+    (entry! a i j v))
+  (invoke [a i j]
+    (entry a i j))
+  (invoke [a]
+    (.fd stor))
+  IFn$L
+  (invokePrim [a]
+    (.fd stor))
+  RealChangeable
+  (isAllowed [a i j]
+    true)
+  (set [a val]
+    (if-not (Double/isNaN val)
+      (set-all eng val a)
+      (doall-layout nav stor reg i j idx (.set da buf-ptr idx val)))
+    a)
+  (set [a i j val]
+    (.set da buf-ptr (.index nav stor i j) val)
+    a)
+  (setBoxed [a val]
+    (.set a val))
+  (setBoxed [a i j val]
+    (.set a i j val))
+  (alter [a f]
+    (if (instance? IFn$DD f)
+      (doall-layout nav stor reg i j idx
+                    (.set da buf-ptr idx (.invokePrim ^IFn$DD f (.get da buf-ptr idx))))
+      (doall-layout nav stor reg i j idx
+                    (.set da buf-ptr idx (.invokePrimitive nav f i j (.get da buf-ptr idx)))))
+    a)
+  (alter [a i j f]
+    (let [idx (.index nav stor i j)]
+      (.set da buf-ptr idx (.invokePrim ^IFn$DD f (.get da buf-ptr idx)))
+      a))
+  RealNativeMatrix
+  (buffer [_]
+    buf-ptr)
+  (offset [_]
+    0)
+  (stride [_]
+    (.ld stor))
+  (isContiguous [_]
+    (.isGapless stor))
+  (dim [_]
+    (* m n))
+  (mrows [_]
+    m)
+  (ncols [_]
+    n)
+  (entry [a i j]
+    (.get da buf-ptr (.index nav stor i j)))
+  (boxedEntry [a i j]
+    (.entry a i j))
+  (row [a i]
+    (real-block-vector fact false buf-ptr n (.index nav stor i 0)
+                       (if (.isRowMajor nav) 1 (.ld stor))))
+  (rows [a]
+    (dense-rows a))
+  (col [a j]
+    (real-block-vector fact false buf-ptr m (.index nav stor 0 j)
+                       (if (.isColumnMajor nav) 1 (.ld stor))))
+  (cols [a]
+    (dense-cols a))
+  (dia [a]
+    (real-block-vector fact false buf-ptr (min m n) 0 (inc (.ld stor))))
+  (dia [a k]
+    (if (< 0 k)
+      (real-block-vector fact false buf-ptr (min m (- n k)) (.index nav stor 0 k) (inc (.ld stor)))
+      (real-block-vector fact false buf-ptr (min (+ m k) n) (.index nav stor (- k) 0) (inc (.ld stor)))))
+  (dias [a]
+    (dense-dias a))
+  (submatrix [a i j k l]
+    (real-ge-matrix fact false buf-ptr k l (.index nav stor i j)
+                    nav (full-storage (.isColumnMajor nav) k l (.ld stor)) (ge-region k l)))
+  (transpose [a]
+    (real-ge-matrix fact false buf-ptr n m 0 (flip nav) stor (flip reg))))
+
+(extend-base RealGEMatrix)
+(extend-ge-matrix RealGEMatrix real-ge-matrix)
+
+(defn ge-matrix
+  ([constructor fact master buf-ptr m n ofst nav ^FullStorage stor reg]
+   (let [da (data-accessor fact)]
+     (if (<= 0 (* (.capacity stor) (.count da buf-ptr)))
+       (constructor nav stor reg fact da (ge-engine fact) master (pointer buf-ptr ofst) m n)
+       (throw (ex-info "Insufficient buffer size."
+                       {:dim (.capacity stor) :buffer-size (.count da buf-ptr)})))))
+  ([constructor fact m n nav ^FullStorage stor reg]
+   (let-release [buf-ptr (.createDataSource (data-accessor fact) (.capacity stor))]
+     (ge-matrix constructor fact true buf-ptr m n 0 nav stor reg)))
+  ([constructor fact m n column?]
+   (ge-matrix constructor fact m n (layout-navigator column?) (full-storage column? m n) (ge-region m n)))
+  ([constructor fact m n]
+   (ge-matrix constructor fact m n true)))
+
+(def real-ge-matrix (partial ge-matrix ->RealGEMatrix))
+
+(defmethod transfer! [clojure.lang.Sequential RealGEMatrix]
+  [source ^RealGEMatrix destination]
+  (transfer-seq-matrix real-accessor source destination))

@@ -9,8 +9,11 @@
 (ns uncomplicate.neanderthal.internal.cpp.lapack
   (:require [uncomplicate.commons.utils :refer [dragan-says-ex]]
             [uncomplicate.neanderthal
-             [core :refer [dim]]
-             [block :refer [offset stride]]])
+             [core :refer [dim mrows ncols]]
+             [block :refer [offset stride]]]
+            [uncomplicate.neanderthal.internal
+             [api :refer [navigator]]
+             ])
   (:import [org.bytedeco.mkl.global mkl_rt]))
 
 (defmacro with-lapack-check [expr]
@@ -33,3 +36,15 @@
          (~method (byte (int (if ~increasing \I \D))) (dim ~x) (~ptr ~x)))
        ~x)
      (dragan-says-ex "You cannot sort a vector with stride different than 1." {:stride (stride ~x)})))
+
+(defmacro matrix-lasrt [method a increasing]
+  `(let [incr# ~(int (if increasing \I \D))
+         buff# (.buffer ~a)
+         ofst# (.offset ~a)]
+     (dostripe-layout ~a len# idx#
+                      (with-lapack-check (~method incr# len# buff# (+ ofst# idx#))))
+     ~a))
+
+
+(defmacro ge-lan [blas method ptr norm a]
+  `(. ~blas ~method (.layout (navigator ~a)) ~norm (mrows ~a) (ncols ~a) (~ptr ~a) (stride ~a)))
