@@ -373,50 +373,37 @@
      (elu [this# alpha# a# y#]
        (vector-elu this# alpha# a# y#))))
 
-(defn float-uniform [^mkl_rt$VSLStreamStatePtr stream ^double lower ^double upper x]
-  (with-rng-check x
-    (mkl_rt/vsRngUniform mkl_rt/VSL_RNG_METHOD_UNIFORM_STD stream (dim x) (float-ptr x) lower upper)))
-
-(defn float-gaussian [^mkl_rt$VSLStreamStatePtr stream ^double mu ^double sigma x]
-  (with-rng-check x
-    (mkl_rt/vsRngGaussian mkl_rt/VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2 stream (dim x) (float-ptr x) mu sigma)))
-
-(defn double-uniform [^mkl_rt$VSLStreamStatePtr stream ^double lower ^double upper x]
-  (with-rng-check x
-    (mkl_rt/vdRngUniform mkl_rt/VSL_RNG_METHOD_UNIFORM_STD stream (dim x) (double-ptr x) lower upper)))
-
-(defn double-gaussian [^mkl_rt$VSLStreamStatePtr stream ^double mu ^double sigma x]
-  (with-rng-check x
-    (mkl_rt/vdRngGaussian mkl_rt/VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2 stream (dim x) (double-ptr x) mu sigma)))
-
 (def ^:private ones-float (->RealBlockVector nil nil nil true
                                              (doto (float-pointer 1) (put! 0 1.0)) 1 0))
 (def ^:private ones-double (->RealBlockVector nil nil nil true
                                               (doto (double-pointer 1) (put! 0 1.0)) 1 0))
 
+(defn cast-stream ^mkl_rt$VSLStreamStatePtr [stream]
+  (or stream default-rng-stream))
+
+(defmacro real-vector-rng* [name t ptr cast]
+  `(extend-type ~name
+     RandomNumberGenerator
+     (rand-uniform [_# rng-stream# lower# upper# x#]
+       (with-rng-check x#
+         (. mkl_rt ~(cblas "v" t 'RngUniform) mkl_rt/VSL_RNG_METHOD_UNIFORM_STD
+            (cast-stream rng-stream#) (dim x#) (~ptr x#) (~cast lower#) (~cast upper#)))
+       x#)
+     (rand-normal [_# rng-stream# mu# sigma# x#]
+       (with-rng-check x#
+         (. mkl_rt ~(cblas "v" t 'RngGaussian) mkl_rt/VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2
+            (cast-stream rng-stream#) (dim x#) (~ptr x#) (~cast mu#) (~cast sigma#)))
+       x#)))
+
 (deftype FloatVectorEngine [])
 (real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-vector-math* FloatVectorEngine "s" float-ptr float)
-
-(extend-type FloatVectorEngine
-  RandomNumberGenerator
-  (rand-uniform [_ rng-stream lower upper x]
-    (float-uniform (or rng-stream default-rng-stream) lower upper x))
-  (rand-normal [this rng-stream mu sigma x]
-    (with-rng-check x
-      (float-gaussian (or rng-stream default-rng-stream) mu sigma x))))
+(real-vector-rng* FloatVectorEngine "s" float-ptr float)
 
 (deftype DoubleVectorEngine [])
 (real-vector-blas* DoubleVectorEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
 (real-vector-math* DoubleVectorEngine "d" double-ptr double)
-
-(extend-type DoubleVectorEngine
-  RandomNumberGenerator
-  (rand-uniform [_ rng-stream lower upper x]
-    (double-uniform (or rng-stream default-rng-stream) lower upper x))
-  (rand-normal [this rng-stream mu sigma x]
-    (with-rng-check x
-      (double-gaussian (or rng-stream default-rng-stream) mu sigma x))))
+(real-vector-rng* DoubleVectorEngine "d" double-ptr double)
 
 (deftype LongVectorEngine [])
 (integer-vector-blas* LongVectorEngine "d" coerce-double-ptr mkl_rt)
@@ -547,15 +534,41 @@
                             (. ~lapack ~(lapacke t 'lasrt) incr# len# (.position buff# idx#)))))
        a#)))
 
+(defmacro matrix-rng [method ptr rng-method rng-stream a par1 par2]
+  `(do
+     (when (< 0 (dim ~a))
+       (if (.isGapless (storage ~a))
+         (with-rng-check ~a
+           (. mkl_rt ~method ~rng-method ~rng-stream (dim ~a) (~ptr ~a) ~par1 ~par2))
+         (let [buff# (~ptr ~a 0)]
+           (dostripe-layout ~a len# idx#
+                            (with-rng-check ~a
+                              (. mkl_rt ~method ~rng-method ~rng-stream
+                                 len# (.position buff# idx#) ~par1 ~par2))))))
+     ~a))
+
+(defmacro real-ge-rng* [name t ptr cast]
+  `(extend-type ~name
+     RandomNumberGenerator
+     (rand-uniform [_# rng-stream# lower# upper# a#]
+       (matrix-rng ~(cblas "v" t 'RngUniform) ~ptr mkl_rt/VSL_RNG_METHOD_UNIFORM_STD
+                   (cast-stream rng-stream#) a# (~cast lower#) (~cast upper#)))
+     (rand-normal [_# rng-stream# mu# sigma# a#]
+       (matrix-rng ~(cblas "v" t 'RngGaussian) ~ptr mkl_rt/VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2
+                   (cast-stream rng-stream#) a# (~cast mu#) (~cast sigma#)))))
+
 (deftype FloatGEEngine [])
 (real-ge-blas* FloatGEEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-ge-blas-plus* FloatGEEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-ge-lapack* FloatGEEngine "s" float-ptr float mkl_rt)
+(real-ge-rng* FloatGEEngine "s" float-ptr float)
+
 
 (deftype DoubleGEEngine [])
 (real-ge-blas* DoubleGEEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
 (real-ge-blas-plus* DoubleGEEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
 (real-ge-lapack* DoubleGEEngine "d" double-ptr double mkl_rt)
+(real-ge-rng* DoubleGEEngine "d" double-ptr double)
 
 ;; ========================= Sparse Vector engines ============================================
 
