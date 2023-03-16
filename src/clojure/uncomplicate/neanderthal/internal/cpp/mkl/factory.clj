@@ -14,8 +14,8 @@
             [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer put!]]
             [uncomplicate.neanderthal
              [core :refer [dim entry mrows ncols] :as core]
-             [math :refer [f=]]
-             [block :refer [create-data-source initialize buffer offset stride]]]
+             [math :refer [f=] :as math]
+             [block :refer [create-data-source initialize buffer offset stride contiguous?]]]
             [uncomplicate.neanderthal.internal
              [api :refer :all]
              [navigation :refer [full-storage accu-layout dostripe-layout]]
@@ -24,10 +24,8 @@
              [structures :refer :all]
              [lapack :refer :all]
              [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
-                           vector-imax vector-imin ge-map ge-reduce]]]
-            [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc!]]
-            [uncomplicate.neanderthal.internal.host.mkl
-             :refer [sigmoid-over-tanh vector-ramp vector-relu vector-elu]])
+                           vector-imax vector-imin ge-map ge-reduce full-matching-map]]]
+            [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc!]])
   (:import [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
             GEMatrix DenseStorage]
            [org.bytedeco.mkl.global mkl_rt mkl_rt$VSLStreamStatePtr]))
@@ -218,7 +216,41 @@
       (. mkl_rt ~method (dim ~a) (~ptr ~a) (~ptr ~b) (~ptr ~y))
       ~y)))
 
-(defmacro with-rng-check [x expr]
+(defmacro vector-linear-frac [method ptr a b scalea shifta scaleb shiftb y]
+  `(do
+     (check-stride ~a ~b ~y)
+     (. mkl_rt ~method (dim ~a) (~ptr ~a) (~ptr ~b) ~scalea ~shifta ~scaleb ~shiftb (~ptr ~y))
+     ~y))
+
+(defmacro vector-powx [method ptr a b y]
+  `(do
+     (check-stride ~a ~y)
+     (. mkl_rt ~method (dim ~a) (~ptr ~a) ~b (~ptr ~y))
+     ~y))
+
+;; ============ Delegate math functions  ============================================
+
+(defn sigmoid-over-tanh [eng a y]
+  (when-not (identical? a y) (copy eng a y))
+  (linear-frac eng (tanh eng (scal eng 0.5 y) y) a 0.5 0.5 0.0 1.0 y))
+
+(defn vector-ramp [eng a y]
+  (cond (identical? a y) (fmap! math/ramp y)
+        (and (contiguous? a) (contiguous? y)) (fmax eng a (set-all eng 0.0 y) y)
+        :else (fmap! math/ramp (copy eng a y))))
+
+(defn vector-relu [eng alpha a y]
+  (cond (identical? a y) (fmap! (math/relu alpha) y)
+        (and (contiguous? a) (contiguous? y)) (fmax eng a (axpby eng alpha a 0.0 y) y)
+        :else (fmap! (math/relu alpha) (copy eng a y))))
+
+(defn vector-elu [eng alpha a y]
+  (cond (identical? a y) (fmap! (math/elu alpha) y)
+        (and (contiguous? a) (contiguous? y))
+        (fmax eng a (scal eng alpha (expm1 eng (copy eng a y) y)) y)
+        :else (fmap! (math/elu alpha) (copy eng a y))))
+
+(defmacro with-rng-check [x expr] ;;TODO maybe avoid special method for this.
   `(if (< 0 (dim ~x))
      (if (= 1 (stride ~x))
        (let [err# ~expr]
@@ -242,136 +274,135 @@
 
 (def ^:private default-rng-stream (create-stream-ars5 (generate-seed)))
 
-(defmacro real-vector-math* [name t ptr cast]
+(defmacro real-math* [name t ptr cast vector-math vector-linear-frac vector-powx]
   `(extend-type ~name
      VectorMath
      (sqr [_# a# y#]
-       (vector-math ~(math t 'Sqr) ~ptr a# y#))
+       (~vector-math ~(math t 'Sqr) ~ptr a# y#))
      (mul [_# a# b# y#]
-       (vector-math ~(math t 'Mul) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Mul) ~ptr a# b# y#))
      (div [_# a# b# y#]
-       (vector-math ~(math t 'Div) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Div) ~ptr a# b# y#))
      (inv [_# a# y#]
-       (vector-math ~(math t 'Inv) ~ptr a# y#))
+       (~vector-math ~(math t 'Inv) ~ptr a# y#))
      (abs [_# a# y#]
-       (vector-math ~(math t 'Abs) ~ptr a# y#))
+       (~vector-math ~(math t 'Abs) ~ptr a# y#))
      (linear-frac [_# a# b# scalea# shifta# scaleb# shiftb# y#]
-       (check-stride a# b# y#)
-       (. mkl_rt ~(math t 'LinearFrac) (dim a#) (~ptr a#) (~ptr b#)
-          (~cast scalea#) (~cast shifta#) (~cast scaleb#) (~cast shiftb#) (~ptr y#))
-       y#)
+       (~vector-linear-frac ~(math t 'LinearFrac) ~ptr a# b#
+                           (~cast scalea#) (~cast shifta#) (~cast scaleb#) (~cast shiftb#) y#))
      (fmod [_# a# b# y#]
-       (vector-math ~(math t 'Fmod) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Fmod) ~ptr a# b# y#))
      (frem [_# a# b# y#]
-       (vector-math  ~(math t 'Remainder) ~ptr a# b# y#))
+       (~vector-math  ~(math t 'Remainder) ~ptr a# b# y#))
      (sqrt [_# a# y#]
-       (vector-math ~(math t 'Sqrt) ~ptr a# y#))
+       (~vector-math ~(math t 'Sqrt) ~ptr a# y#))
      (inv-sqrt [_# a# y#]
-       (vector-math ~(math t 'InvSqrt) ~ptr a# y#))
+       (~vector-math ~(math t 'InvSqrt) ~ptr a# y#))
      (cbrt [_# a# y#]
-       (vector-math ~(math t 'Cbrt) ~ptr a# y#))
+       (~vector-math ~(math t 'Cbrt) ~ptr a# y#))
      (inv-cbrt [_# a# y#]
-       (vector-math ~(math t 'InvCbrt) ~ptr a# y#))
+       (~vector-math ~(math t 'InvCbrt) ~ptr a# y#))
      (pow2o3 [_# a# y#]
-       (vector-math ~(math t 'Pow2o3) ~ptr a# y#))
+       (~vector-math ~(math t 'Pow2o3) ~ptr a# y#))
      (pow3o2 [_# a# y#]
-       (vector-math ~(math t 'Pow3o2) ~ptr a# y#))
+       (~vector-math ~(math t 'Pow3o2) ~ptr a# y#))
      (pow [_# a# b# y#]
-       (vector-math ~(math t 'Pow) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Pow) ~ptr a# b# y#))
      (powx [_# a# b# y#]
-       (check-stride a# y#)
-       (. mkl_rt ~(math t 'Powx) (dim a#) (~ptr a#) (~cast b#) (~ptr y#))
-       y#)
+       (~vector-powx ~(math t 'Powx) ~ptr a# (~cast b#) y#))
      (hypot [_# a# b# y#]
-       (vector-math ~(math t 'Hypot) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Hypot) ~ptr a# b# y#))
      (exp [_# a# y#]
-       (vector-math ~(math t 'Exp) ~ptr a# y#))
+       (~vector-math ~(math t 'Exp) ~ptr a# y#))
      (exp2 [_# a# y#]
-       (vector-math ~(math t 'Exp2) ~ptr a# y#))
+       (~vector-math ~(math t 'Exp2) ~ptr a# y#))
      (exp10 [_# a# y#]
-       (vector-math ~(math t 'Exp10) ~ptr a# y#))
+       (~vector-math ~(math t 'Exp10) ~ptr a# y#))
      (expm1 [_# a# y#]
-       (vector-math ~(math t 'Expm1) ~ptr a# y#))
+       (~vector-math ~(math t 'Expm1) ~ptr a# y#))
      (log [_# a# y#]
-       (vector-math ~(math t 'Ln) ~ptr a# y#))
+       (~vector-math ~(math t 'Ln) ~ptr a# y#))
      (log2 [_# a# y#]
-       (vector-math ~(math t 'Log2) ~ptr a# y#))
+       (~vector-math ~(math t 'Log2) ~ptr a# y#))
      (log10 [_# a# y#]
-       (vector-math ~(math t 'Log10) ~ptr a# y#))
+       (~vector-math ~(math t 'Log10) ~ptr a# y#))
      (log1p [_# a# y#]
-       (vector-math ~(math t 'Log1p) ~ptr a# y#))
+       (~vector-math ~(math t 'Log1p) ~ptr a# y#))
      (sin [_# a# y#]
-       (vector-math ~(math t 'Sin) ~ptr a# y#))
+       (~vector-math ~(math t 'Sin) ~ptr a# y#))
      (cos [_# a# y#]
-       (vector-math ~(math t 'Cos) ~ptr a# y#))
+       (~vector-math ~(math t 'Cos) ~ptr a# y#))
      (tan [_# a# y#]
-       (vector-math ~(math t 'Tan) ~ptr a# y#))
+       (~vector-math ~(math t 'Tan) ~ptr a# y#))
      (sincos [_# a# y# z#]
-       (vector-math ~(math t 'SinCos) ~ptr a# y# z#))
+       (~vector-math ~(math t 'SinCos) ~ptr a# y# z#))
      (asin [_# a# y#]
-       (vector-math ~(math t 'Asin) ~ptr a# y#))
+       (~vector-math ~(math t 'Asin) ~ptr a# y#))
      (acos [_# a# y#]
-       (vector-math ~(math t 'Acos) ~ptr a# y#))
+       (~vector-math ~(math t 'Acos) ~ptr a# y#))
      (atan [_# a# y#]
-       (vector-math ~(math t 'Atan) ~ptr a# y#))
+       (~vector-math ~(math t 'Atan) ~ptr a# y#))
      (atan2 [_# a# b# y#]
-       (vector-math ~(math t 'Atan2) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Atan2) ~ptr a# b# y#))
      (sinh [_# a# y#]
-       (vector-math ~(math t 'Sinh) ~ptr a# y#))
+       (~vector-math ~(math t 'Sinh) ~ptr a# y#))
      (cosh [_# a# y#]
-       (vector-math ~(math t 'Cosh) ~ptr a# y#))
+       (~vector-math ~(math t 'Cosh) ~ptr a# y#))
      (tanh [_# a# y#]
-       (vector-math ~(math t 'Tanh) ~ptr a# y#))
+       (~vector-math ~(math t 'Tanh) ~ptr a# y#))
      (asinh [_# a# y#]
-       (vector-math ~(math t 'Asinh) ~ptr a# y#))
+       (~vector-math ~(math t 'Asinh) ~ptr a# y#))
      (acosh [_# a# y#]
-       (vector-math ~(math t 'Acosh) ~ptr a# y#))
+       (~vector-math ~(math t 'Acosh) ~ptr a# y#))
      (atanh [_# a# y#]
-       (vector-math ~(math t 'Atanh) ~ptr a# y#))
+       (~vector-math ~(math t 'Atanh) ~ptr a# y#))
      (erf [_# a# y#]
-       (vector-math ~(math t 'Erf) ~ptr a# y#))
+       (~vector-math ~(math t 'Erf) ~ptr a# y#))
      (erfc [_# a# y#]
-       (vector-math ~(math t 'Erfc) ~ptr a# y#))
+       (~vector-math ~(math t 'Erfc) ~ptr a# y#))
      (erf-inv [_# a# y#]
-       (vector-math ~(math t 'ErfInv) ~ptr a# y#))
+       (~vector-math ~(math t 'ErfInv) ~ptr a# y#))
      (erfc-inv [_# a# y#]
-       (vector-math ~(math t 'ErfcInv) ~ptr a# y#))
+       (~vector-math ~(math t 'ErfcInv) ~ptr a# y#))
      (cdf-norm [_# a# y#]
-       (vector-math ~(math t 'CdfNorm) ~ptr a# y#))
+       (~vector-math ~(math t 'CdfNorm) ~ptr a# y#))
      (cdf-norm-inv [_# a# y#]
-       (vector-math ~(math t 'CdfNormInv) ~ptr a# y#))
+       (~vector-math ~(math t 'CdfNormInv) ~ptr a# y#))
      (gamma [_# a# y#]
-       (vector-math ~(math t 'TGamma) ~ptr a# y#))
+       (~vector-math ~(math t 'TGamma) ~ptr a# y#))
      (lgamma [_# a# y#]
-       (vector-math ~(math t 'LGamma) ~ptr a# y#))
+       (~vector-math ~(math t 'LGamma) ~ptr a# y#))
      (expint1 [_# a# y#]
-       (vector-math ~(math t 'ExpInt1) ~ptr a# y#))
+       (~vector-math ~(math t 'ExpInt1) ~ptr a# y#))
      (floor [_# a# y#]
-       (vector-math ~(math t 'Floor) ~ptr a# y#))
+       (~vector-math ~(math t 'Floor) ~ptr a# y#))
      (fceil [_# a# y#]
-       (vector-math ~(math t 'Ceil) ~ptr a# y#))
+       (~vector-math ~(math t 'Ceil) ~ptr a# y#))
      (trunc [_# a# y#]
-       (vector-math ~(math t 'Trunc) ~ptr a# y#))
+       (~vector-math ~(math t 'Trunc) ~ptr a# y#))
      (round [_# a# y#]
-       (vector-math ~(math t 'Round) ~ptr a# y#))
+       (~vector-math ~(math t 'Round) ~ptr a# y#))
      (modf [_# a# y# z#]
-       (vector-math ~(math t 'Modf) ~ptr a# y# z#))
+       (~vector-math ~(math t 'Modf) ~ptr a# y# z#))
      (frac [_# a# y#]
-       (vector-math ~(math t 'Frac) ~ptr a# y#))
+       (~vector-math ~(math t 'Frac) ~ptr a# y#))
      (fmin [_# a# b# y#]
-       (vector-math ~(math t 'Fmin) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Fmin) ~ptr a# b# y#))
      (fmax [_# a# b# y#]
-       (vector-math ~(math t 'Fmax) ~ptr a# b# y#))
+       (~vector-math ~(math t 'Fmax) ~ptr a# b# y#))
      (copy-sign [_# a# b# y#]
-       (vector-math ~(math t 'CopySign) ~ptr a# b# y#))
+       (~vector-math ~(math t 'CopySign) ~ptr a# b# y#))
      (sigmoid [this# a# y#]
        (sigmoid-over-tanh this# a# y#))
      (ramp [this# a# y#]
-       (vector-ramp this# a# y#))
+       (~vector-ramp this# a# y#))
      (relu [this# alpha# a# y#]
-       (vector-relu this# alpha# a# y#))
+       (~vector-relu this# alpha# a# y#))
      (elu [this# alpha# a# y#]
-       (vector-elu this# alpha# a# y#))))
+       (~vector-elu this# alpha# a# y#))))
+
+(defmacro real-vector-math* [name t ptr cast]
+  `(real-math* ~name ~t ~ptr ~cast vector-math vector-linear-frac vector-powx))
 
 (def ^:private ones-float (->RealBlockVector nil nil nil true
                                              (doto (float-pointer 1) (put! 0 1.0)) 1 0))
@@ -441,12 +472,12 @@
        b#)
      (dot [_# a# b#]
        (ge-reduce ~blas ~(cblas t 'dot) ~ptr 0.0 a# b#))
-     (nrm1 [_# x#]
-       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \O)) a))
-     (nrm2 [_# x#]
-       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \F)) a))
-     (nrmi [_# x#]
-       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \I)) a))
+     (nrm1 [_# a#]
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \O)) a#))
+     (nrm2 [_# a#]
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \F)) a#))
+     (nrmi [_# a#]
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \I)) a#))
      (asum [_# a#]
        (if (< 0 (dim a#))
          (let [buff# (~ptr a# 0)]
@@ -472,7 +503,7 @@
        ([_# a# _#]
         (dragan-says-ex "In-place mv! is not supported for GE matrices." {:a (info a#)})))
      (rk [_# alpha# x# y# a#]
-       (. ~blas ~(cblas t 'ger) (.layout (navigator a#)) (mrows a) (ncols a#)
+       (. ~blas ~(cblas t 'ger) (.layout (navigator a#)) (mrows a#) (ncols a#)
           (~cast alpha#) (~ptr x#) (stride x#) (~ptr y#) (stride y#) (~ptr a#) (stride a#))
        a#)
      (mm
@@ -496,7 +527,7 @@
   `(extend-type ~name
      BlasPlus
      (amax [_# a#]
-       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \M)) a))
+       (ge-lan ~lapack ~(lapacke t 'lange) ~ptr ~(byte (int \M)) a#))
      (sum [_# a#]
        (if (< 0 (dim a#))
          (if (.isGapless (storage a#))
@@ -534,6 +565,52 @@
                             (. ~lapack ~(lapacke t 'lasrt) incr# len# (.position buff# idx#)))))
        a#)))
 
+(defmacro matrix-math
+  ([method ptr a y]
+   `(do
+      (when (< 0 (long (dim ~a)))
+        (let [buff-a# (~ptr ~a 0)
+              buff-y# (~ptr ~y 0)]
+          (full-matching-map ~a ~y len# buff-a# buff-y#
+                             (. mkl_rt ~method (dim ~a) buff-a# buff-y#)
+                             (. mkl_rt ~method len# buff-a# buff-y#))))
+      ~y))
+  ([method ptr a b y]
+   `(do
+      (when (< 0 (dim ~a))
+        (let [buff-a# (~ptr ~a 0)
+              buff-b# (~ptr ~b 0)
+              buff-y# (~ptr ~y 0)]
+          (full-matching-map ~a ~b ~y len# buff-a# buff-b# buff-y#
+                             (. mkl_rt ~method (dim ~a) buff-a# buff-b# buff-y#)
+                             (. mkl_rt ~method len# buff-a# buff-b# buff-y#))))
+      ~y)))
+
+(defmacro matrix-powx [method ptr a b y]
+  `(do
+     (when (< 0 (dim ~a))
+       (let [buff-a# (~ptr ~a 0)
+             buff-y# (~ptr ~y 0)]
+         (full-matching-map ~a ~y len# buff-a# buff-y#
+                            (. mkl_rt ~method (dim ~a) buff-a# ~b buff-y#)
+                            (. mkl_rt ~method len# buff-a# ~b buff-y#))))
+     ~y))
+
+(defmacro matrix-linear-frac [method ptr a b scalea shifta scaleb shiftb y]
+  `(do
+     (when (< 0 (dim ~a))
+       (let [buff-a# (~ptr ~a 0)
+             buff-b# (~ptr ~b 0)
+             buff-y# (~ptr ~y 0)]
+         (full-matching-map
+          ~a ~b ~y len# buff-a# buff-b# buff-y#
+          (. mkl_rt ~method (dim ~a) buff-a# buff-b# ~scalea ~shifta ~scaleb ~shiftb buff-y#)
+          (. mkl_rt ~method len# buff-a# buff-b# ~scalea ~shifta ~scaleb ~shiftb buff-y# ))))
+     ~y))
+
+(defmacro real-matrix-math* [name t ptr cast]
+  `(real-math* ~name ~t ~ptr ~cast matrix-math matrix-linear-frac matrix-powx))
+
 (defmacro matrix-rng [method ptr rng-method rng-stream a par1 par2]
   `(do
      (when (< 0 (dim ~a))
@@ -562,6 +639,7 @@
 (real-ge-blas* FloatGEEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-ge-blas-plus* FloatGEEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-ge-lapack* FloatGEEngine "s" float-ptr float mkl_rt)
+(real-matrix-math* FloatGEEngine "s" float-ptr float)
 (real-ge-rng* FloatGEEngine "s" float-ptr float)
 
 

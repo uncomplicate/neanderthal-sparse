@@ -16,6 +16,7 @@
              [core :refer [dim entry]]]
             [uncomplicate.neanderthal.internal
              [api :refer [iamax engine data-accessor navigator storage region]]
+             [common :refer [check-eq-navigators]]
              [navigation :refer [full-storage]]]
             [uncomplicate.neanderthal.internal.cpp.mkl.constants :refer :all])
   (:import [org.bytedeco.mkl.global mkl_rt]
@@ -108,7 +109,6 @@
                        ~expr))
               ~acc)))))))
 
-
 (defmacro full-storage-map
   ([a b len buff-a buff-b ld-a expr-direct expr]
    `(let [nav-a# (navigator ~a)
@@ -134,6 +134,43 @@
               (position! ~buff-a (.index stor-a# j# start#))
               (position! ~buff-b (.index stor-b# start# j#))
               ~expr)))))))
+
+(defmacro full-matching-map
+  ([a b len buff-a buff-b expr-direct expr]
+   `(let [nav-a# (navigator ~a)
+          nav-b# (navigator ~b)
+          reg# (region ~b)
+          stor-a# (full-storage ~a)
+          stor-b# (full-storage ~b)
+          fd-a# (.fd stor-a#)]
+      (check-eq-navigators ~a ~b)
+      (if (and (.isGapless stor-a#) (.isGapless stor-b#))
+        ~expr-direct
+        (dotimes [j# fd-a#]
+          (let [start# (.start nav-a# reg# j#)
+                ~len (- (.end nav-a# reg# j#) start#)]
+            (position! ~buff-a (.index stor-a# start# j#))
+            (position! ~buff-b (.index stor-b# start# j#))
+            ~expr)))))
+  ([a b c len buff-a buff-b buff-c expr-direct expr]
+   `(let [nav-a# (navigator ~a)
+          nav-b# (navigator ~b)
+          nav-c# (navigator ~c)
+          reg# (region ~b)
+          stor-a# (full-storage ~a)
+          stor-b# (full-storage ~b)
+          stor-c# (full-storage ~c)
+          fd-a# (.fd stor-a#)]
+      (check-eq-navigators ~a ~b ~c)
+      (if (and (.isGapless stor-a#) (.isGapless stor-b#) (.isGapless stor-c#))
+        ~expr-direct
+        (dotimes [j# fd-a#]
+          (let [start# (.start nav-a# reg# j#)
+                ~len (- (.end nav-a# reg# j#) start#)]
+            (position! ~buff-a (.index stor-a# start# j#))
+            (position! ~buff-b (.index stor-b# start# j#))
+            (position! ~buff-c (.index stor-c# start# j#))
+            ~expr))))))
 
 (defmacro ge-map [blas method ptr a b]
   `(do
