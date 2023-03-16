@@ -538,8 +538,9 @@
   `(do
      (when (< 0 (dim ~a))
        (if (.isGapless (storage ~a))
-         (with-rng-check ~a
-           (. mkl_rt ~method ~rng-method ~rng-stream (dim ~a) (~ptr ~a) ~par1 ~par2))
+         (with-mkl-check
+           (. mkl_rt ~method ~rng-method ~rng-stream (dim ~a) (~ptr ~a) ~par1 ~par2)
+           ~a)
          (let [buff# (~ptr ~a 0)]
            (dostripe-layout ~a len# idx#
                             (with-rng-check ~a

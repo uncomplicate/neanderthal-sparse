@@ -200,26 +200,27 @@
 (defmacro extend-block-vector [name block-vector]
   `(extend-type ~name
      Info
-     (info [this#]
-       {:entry-type (.entryType (data-accessor this#))
-        :class ~name
-        :device :cpu
-        :dim (dim this#)
-        :offset (offset this#)
-        :stride (.-strd this#)
-        :master (.-master this#)
-        :engine (info (.-eng this#))})
-     (info [this# info-type#]
-       (case info-type#
-         :entry-type (.entryType (data-accessor this#))
+     (info
+       ([this#]
+        {:entry-type (.entryType (data-accessor this#))
          :class ~name
          :device :cpu
          :dim (dim this#)
          :offset (offset this#)
          :stride (.-strd this#)
          :master (.-master this#)
-         :engine (info (.-eng this#))
-         nil))
+         :engine (info (.-eng this#))})
+       ([this# info-type#]
+        (case info-type#
+          :entry-type (.entryType (data-accessor this#))
+          :class ~name
+          :device :cpu
+          :dim (dim this#)
+          :offset (offset this#)
+          :stride (.-strd this#)
+          :master (.-master this#)
+          :engine (info (.-eng this#))
+          nil)))
      Container
      (raw
        ([this#]
@@ -698,24 +699,9 @@
 (defmacro extend-ge-matrix [name ge-matrix]
   `(extend-type ~name
      Info
-     (info [this#]
-       {:entry-type (.entryType (data-accessor this#))
-        :class ~name
-        :device :cpu
-        :matrix-type :ge
-        :dim (dim this#)
-        :m (.-m this#)
-        :n (.-n this#)
-        :offset (offset this#)
-        :stride (stride this#)
-        :master (.-master this#)
-        :layout (:layout (info (.-nav this#)))
-        :storage (info (.-nav this#))
-        :region (info (.-reg this#))
-        :engine (info (.-eng this#))})
-     (info [this# info-type#]
-       (case info-type#
-         :entry-type (.entryType (data-accessor this#))
+     (info
+       ([this#]
+        {:entry-type (.entryType (data-accessor this#))
          :class ~name
          :device :cpu
          :matrix-type :ge
@@ -728,8 +714,24 @@
          :layout (:layout (info (.-nav this#)))
          :storage (info (.-nav this#))
          :region (info (.-reg this#))
-         :engine (info (.-eng this#))
-         nil))
+         :engine (info (.-eng this#))})
+       ([this# info-type#]
+        (case info-type#
+          :entry-type (.entryType (data-accessor this#))
+          :class ~name
+          :device :cpu
+          :matrix-type :ge
+          :dim (dim this#)
+          :m (.-m this#)
+          :n (.-n this#)
+          :offset (offset this#)
+          :stride (stride this#)
+          :master (.-master this#)
+          :layout (:layout (info (.-nav this#)))
+          :storage (info (.-nav this#))
+          :region (info (.-reg this#))
+          :engine (info (.-eng this#))
+          nil)))
      Navigable
      (navigator [this#]
        (.-nav this#))
