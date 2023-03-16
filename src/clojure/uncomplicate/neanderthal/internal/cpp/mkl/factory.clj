@@ -647,6 +647,7 @@
 (real-ge-blas* DoubleGEEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
 (real-ge-blas-plus* DoubleGEEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
 (real-ge-lapack* DoubleGEEngine "d" double-ptr double mkl_rt)
+(real-matrix-math* DoubleGEEngine "d" double-ptr double)
 (real-ge-rng* DoubleGEEngine "d" double-ptr double)
 
 ;; ========================= Sparse Vector engines ============================================
