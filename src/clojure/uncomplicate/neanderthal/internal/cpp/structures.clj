@@ -27,7 +27,8 @@
     [api :refer :all]
     [printing :refer [print-vector print-ge print-uplo print-banded print-diagonal]]
     [common :refer [dense-rows dense-cols dense-dias require-trf]]
-    [navigation :refer :all]])
+    [navigation :refer :all]]
+   [uncomplicate.neanderthal.internal.host.fluokitten :refer :all])
   (:import [java.nio Buffer ByteBuffer]
            [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
             IFn$LDD IFn$LLDD IFn$LLL]
@@ -41,7 +42,6 @@
             UploMatrix BandedMatrix PackedMatrix DiagonalMatrix]))
 
 (declare real-block-vector integer-block-vector cs-vector real-ge-matrix)
-
 
 ;; ================ Pointer data accessors  ====================================
 
@@ -62,8 +62,11 @@
 (defmacro get* [pt p i]
   `(. ~(with-meta p {:tag pt}) get (long ~i)))
 
+(defprotocol Destructor
+  (destruct [this p]))
+
 (defmacro def-accessor-type [name accessor-interface pointer-class entry-class pointer wrap-fn cast-fn]
-  `(deftype ~name [constructor#]
+  `(deftype ~name [construct# destruct#]
      DataAccessor
      (entryType [_]
        (. ~entry-class TYPE))
@@ -72,7 +75,7 @@
      (count [_ p#]
        (element-count p#))
      (createDataSource [_ n#]
-       (capacity! (~pointer (constructor# (* (. ~entry-class BYTES) n#))) n#))
+       (capacity! (~pointer (construct# (* (. ~entry-class BYTES) (max 1 n#)))) n#))
      (initialize [_ p#]
        (fill! p# 0))
      (initialize [_ p# v#]
@@ -84,6 +87,9 @@
      DataAccessorProvider
      (data-accessor [this#]
        this#)
+     Destructor
+     (destruct [_# p#]
+       (destruct# p#))
      MemoryContext
      (compatible? [this# o#]
        (let [da# (data-accessor o#)]
@@ -181,7 +187,11 @@
   `(extend-type ~name
      Releaseable
      (release [this#]
-       (if (.-master this#) (release (.-buf-ptr this#)) true))
+       (if (.-master this#)
+         (if (destruct (data-accessor this#) (buffer this#))
+           true
+           false)
+         true))
      EngineProvider
      (engine [this#]
        (.-eng this#))
@@ -265,6 +275,18 @@
        ([this# v# vs#]
         (vctr (.-fact this#) (cons v# vs#))))))
 
+(defmacro extend-vector-fluokitten [t cast]
+  `(extend ~t
+     Functor
+     {:fmap (vector-fmap ~t ~cast)}
+     PseudoFunctor
+     {:fmap! (vector-fmap identity ~t ~cast)}
+     Foldable
+     {:fold vector-fold
+      :foldmap (vector-foldmap ~t ~cast)}
+     Magma
+     {:op (constantly vector-op)}))
+
 ;; ============ Integer Vector ====================================================
 
 (deftype IntegerBlockVector [fact ^IntegerAccessor da eng master buf-ptr
@@ -344,6 +366,7 @@
 
 (extend-base IntegerBlockVector)
 (extend-block-vector IntegerBlockVector integer-block-vector)
+(extend-vector-fluokitten IntegerBlockVector long)
 
 (def integer-block-vector (partial block-vector ->IntegerBlockVector))
 
@@ -476,6 +499,7 @@
 
 (extend-base RealBlockVector)
 (extend-block-vector RealBlockVector real-block-vector)
+(extend-vector-fluokitten RealBlockVector double)
 
 (def real-block-vector (partial block-vector ->RealBlockVector))
 
@@ -816,6 +840,18 @@
      (trdet [a#]
        (require-trf))))
 
+(defmacro extend-matrix-fluokitten [t cast]
+  `(extend ~t
+     Functor
+     {:fmap (matrix-fmap ~cast)}
+     PseudoFunctor
+     {:fmap! (matrix-fmap identity ~cast)}
+     Foldable
+     {:fold matrix-fold
+      :foldmap matrix-foldmap}
+     Magma
+     {:op (constantly matrix-op)}))
+
 ;; =================== Real Matrix =============================================
 
 (defn matrix-equals [^RealNativeMatrix a ^RealNativeMatrix b]
@@ -936,6 +972,7 @@
 
 (extend-base RealGEMatrix)
 (extend-ge-matrix RealGEMatrix real-ge-matrix)
+(extend-matrix-fluokitten RealGEMatrix double)
 
 (defn ge-matrix
   ([constructor fact master buf-ptr m n ofst nav ^FullStorage stor reg]

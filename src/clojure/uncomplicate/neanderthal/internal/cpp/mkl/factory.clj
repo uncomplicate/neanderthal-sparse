@@ -25,7 +25,7 @@
              [lapack :refer :all]
              [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
                            vector-imax vector-imin ge-map ge-reduce full-matching-map]]]
-            [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc!]])
+            [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc! free!]])
   (:import [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
             GEMatrix DenseStorage]
            [org.bytedeco.mkl.global mkl_rt mkl_rt$VSLStreamStatePtr]))
@@ -173,6 +173,16 @@
      (axpy [this# alpha# x# y#]
        (. ~blas ~(cblas t 'axpy) (dim x#) (~cast alpha#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
        y#)
+     Lapack
+     (srt [this# x# increasing#]
+       (if (= 1 (stride x#))
+         (with-lapack-check
+           (. ~lapack ~(lapacke t 'lasrt) (byte (int (if increasing# \I \D))) (dim x#) (~ptr x#)))
+         (dragan-says-ex "You cannot sort a vector with stride." {"stride" (stride x#)}))
+       x#)))
+
+(defmacro real-vector-blas-plus* [name t ptr cast blas lapack ones]
+  `(extend-type ~name
      BlasPlus
      (amax [this# x#]
        (if (< 0 (dim x#))
@@ -195,14 +205,7 @@
      (axpby [this# alpha# x# beta# y#]
        (. ~blas ~(cblas t 'axpby) (dim x#)
           (~cast alpha#) (~ptr x#) (stride x#) (~cast beta#) (~ptr y#) (stride y#))
-       y#)
-     Lapack
-     (srt [this# x# increasing#]
-       (if (= 1 (stride x#))
-         (with-lapack-check
-           (. ~lapack ~(lapacke t 'lasrt) (byte (int (if increasing# \I \D))) (dim x#) (~ptr x#)))
-         (dragan-says-ex "You cannot sort a vector with stride." {"stride" (stride x#)}))
-       x#)))
+       y#)))
 
 (defmacro vector-math
   ([method ptr a y]
@@ -428,11 +431,13 @@
 
 (deftype FloatVectorEngine [])
 (real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
+(real-vector-blas-plus* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-vector-math* FloatVectorEngine "s" float-ptr float)
 (real-vector-rng* FloatVectorEngine "s" float-ptr float)
 
 (deftype DoubleVectorEngine [])
 (real-vector-blas* DoubleVectorEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
+(real-vector-blas-plus* DoubleVectorEngine "d" double-ptr double mkl_rt mkl_rt ones-double)
 (real-vector-math* DoubleVectorEngine "d" double-ptr double)
 (real-vector-rng* DoubleVectorEngine "d" double-ptr double)
 
@@ -706,7 +711,10 @@
          (axpy (engine (entries x#)) alpha# (entries x#) (entries y#))
          (. ~blas ~(cblas t 'axpyi) (dim (entries x#))
             (~cast alpha#) (~ptr x#) (~idx-ptr (indices x#)) (~ptr y#)))
-       y#)
+       y#)))
+
+(defmacro real-cs-vector-blas-plus* [name t ptr idx-ptr cast blas]
+  `(extend-type ~name
      BlasPlus
      (amax [this# x#]
        (amax (engine (entries x#)) (entries x#)))
@@ -739,11 +747,13 @@
 
 (deftype FloatCSVectorEngine [])
 (real-cs-vector-blas* FloatCSVectorEngine "s" float-ptr int-ptr float mkl_rt ones-float)
+(real-cs-vector-blas-plus* FloatCSVectorEngine "s" float-ptr int-ptr float mkl_rt)
 (real-vector-math* FloatCSVectorEngine "s" float-ptr float)
 (real-cs-vector-sparse-blas* FloatCSVectorEngine "s" float-ptr int-ptr mkl_rt)
 
 (deftype DoubleCSVectorEngine [])
 (real-cs-vector-blas* DoubleCSVectorEngine "d" double-ptr int-ptr double mkl_rt ones-double)
+(real-cs-vector-blas-plus* DoubleCSVectorEngine "d" double-ptr int-ptr double mkl_rt)
 (real-vector-math* DoubleCSVectorEngine "d" double-ptr double)
 (real-cs-vector-sparse-blas* DoubleCSVectorEngine "d" double-ptr int-ptr mkl_rt)
 
@@ -811,10 +821,10 @@
   (vector-engine [_]
     vector-eng))
 
-(def float-accessor (->FloatPointerAccessor malloc!))
-(def double-accessor (->DoublePointerAccessor malloc!))
-(def int-accessor (->IntPointerAccessor malloc!))
-(def long-accessor (->LongPointerAccessor malloc!))
+(def float-accessor (->FloatPointerAccessor malloc! free!))
+(def double-accessor (->DoublePointerAccessor malloc! free!))
+(def int-accessor (->IntPointerAccessor malloc! free!))
+(def long-accessor (->LongPointerAccessor malloc! free!))
 
 (def mkl-int (->MKLIntegerFactory mkl-int int-accessor (->IntVectorEngine)))
 (def mkl-long (->MKLIntegerFactory mkl-long long-accessor (->LongVectorEngine)))

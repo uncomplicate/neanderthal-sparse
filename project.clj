@@ -14,7 +14,7 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [org.uncomplicate/clojure-cpp "0.1.0-SNAPSHOT"]
-                 [uncomplicate/neanderthal "0.46.0"]
+                 [uncomplicate/neanderthal "0.47.0-SNAPSHOT"]
                  [org.bytedeco/mkl "2022.2-1.5.9-SNAPSHOT"]]
 
   :profiles {:dev {:plugins [[lein-midje "3.2.1"]
@@ -25,7 +25,8 @@
                                  *unchecked-math* :warn-on-boxed
                                  *print-length* 128}
                    :dependencies [[midje "1.10.9"]
-                                  [org.bytedeco/mkl-platform "2022.2-1.5.9-SNAPSHOT"]]
+                                  [org.bytedeco/mkl-platform "2022.2-1.5.9-SNAPSHOT"]
+                                  [uncomplicate/neanderthal "0.47.0-SNAPSHOT" :classifier "tests" ]]
 
                    :jvm-opts ^:replace ["-Dclojure.compiler.direct-linking=true"
                                         "-XX:MaxDirectMemorySize=16g" "-XX:+UseLargePages"
