@@ -26,7 +26,8 @@
              [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
                            vector-imax vector-imin ge-map ge-reduce full-matching-map]]]
             [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc! free!]])
-  (:import [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
+  (:import java.nio.ByteBuffer
+           [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
             GEMatrix DenseStorage]
            [org.bytedeco.mkl.global mkl_rt mkl_rt$VSLStreamStatePtr]))
 
@@ -68,14 +69,43 @@
 (def ^{:no-doc true :const true} SHORT_UNSUPPORTED_MSG
   "BLAS operation on short vectors are supported only on dimensions divisible by 2 (short) or 4 (byte).")
 
-(defmacro integer-vector-blas* [name t ptr blas]
+(defmacro patch-vector-method [chunk blas method ptr x y]
+  (if (= 1 chunk)
+    `(. ~blas ~method (dim ~x) (~ptr ~x) (stride ~x) (~ptr ~y) (stride ~y))
+    `(if (= 0 (rem (dim ~x) ~chunk))
+       (. ~blas ~method (quot (dim ~x) ~chunk) (~ptr ~x 0) (stride ~x) (~ptr ~y 0) (stride ~y))
+       (dragan-says-ex SHORT_UNSUPPORTED_MSG {:dim-x (dim ~x)}))))
+
+(defmacro patch-subcopy [chunk blas method ptr x y kx lx ky]
+  (if (= 1 chunk)
+    `(. ~blas ~method (int lx#) (~ptr ~x ~kx) (stride ~x) (~ptr ~y ~ky) (stride ~y))
+    `(do
+       (check-stride ~x ~y)
+       (if (= 0 (rem ~kx ~chunk) (rem ~lx ~chunk) (rem ~ky ~chunk))
+         (. ~blas ~method (quot ~lx ~chunk) (~ptr ~x ~kx) (stride ~x) (~ptr ~y ~ky) (stride ~y))
+         (dragan-says-ex SHORT_UNSUPPORTED_MSG {:dim-x (dim ~x)})))))
+
+(defmacro patch-vector-laset [chunk lapack method ptr alpha x]
+  (if (= 1 chunk)
+    `(with-lapack-check
+       (. ~lapack ~method ~(int (:row blas-layout)) ~(byte (int \g))
+          (dim ~x) 1 ~alpha ~alpha (~ptr ~x) (stride ~x)))
+    `(do
+       (check-stride ~x)
+       (if (= 0 (rem (dim ~x) ~chunk))
+         (with-lapack-check
+           (. ~lapack ~method ~(int (:row blas-layout)) ~(byte (int \g))
+              (quot (dim ~x) ~chunk) 1 ~alpha ~alpha (~ptr ~x 0) (stride ~x)))
+         (dragan-says-ex SHORT_UNSUPPORTED_MSG {:dim-x (dim ~x)})))))
+
+(defmacro integer-vector-blas* [name t ptr blas chunk]
   `(extend-type ~name
      Blas
      (swap [_# x# y#]
-       (. ~blas ~(cblas t 'swap) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
+       (patch-vector-method ~chunk ~blas ~(cblas t 'swap) ~ptr x# y#)
        x#)
      (copy [_# x# y#]
-       (. ~blas ~(cblas t 'copy) (dim x#) (~ptr x#) (stride x#) (~ptr y#) (stride y#))
+       (patch-vector-method ~chunk ~blas ~(cblas t 'copy) ~ptr x# y#)
        y#)
      (dot [_# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
@@ -107,13 +137,13 @@
      (srt [_# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))))
 
-(defmacro integer-vector-blas-plus* [name t cast ptr blas lapack]
+(defmacro integer-vector-blas-plus* [name t cast ptr blas lapack chunk]
   `(extend-type ~name
      BlasPlus
      (amax [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
      (subcopy [_# x# y# kx# lx# ky#]
-       (. ~blas ~(cblas t 'copy) (int lx#) (~ptr x# kx#) (stride x#) (~ptr y# ky#) (stride y#))
+       (patch-subcopy (long ~chunk) ~blas ~(cblas t 'copy) ~ptr x# y# (long kx#) (long lx#) (long ky#))
        y#)
      (sum [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
@@ -122,9 +152,7 @@
      (imin [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
      (set-all [_# alpha# x#]
-       (with-lapack-check
-         (. ~lapack ~(lapacke t 'laset) ~(int (:row blas-layout)) ~(byte (int \g)) (dim x#) 1
-            (~cast alpha#) (~cast alpha#) (~ptr x#) (stride x#)))
+       (patch-vector-laset (long ~chunk) ~lapack ~(lapacke t 'laset) ~ptr (~cast alpha#) x#)
        x#)
      (axpby [_# _# _# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))))
@@ -429,6 +457,28 @@
             (cast-stream rng-stream#) (dim x#) (~ptr x#) (~cast mu#) (~cast sigma#)))
        x#)))
 
+(defmacro byte-float [x]
+  `(let [b# (ByteBuffer/allocate Float/BYTES)
+         x# (byte ~x)]
+     (.put b# 0 x#)
+     (.put b# 1 x#)
+     (.put b# 2 x#)
+     (.put b# 3 x#)
+     (.getFloat b# 0)))
+
+(defmacro short-float [x]
+  `(let [b# (ByteBuffer/allocate Float/BYTES)
+         x# (short ~x)]
+     (.putShort b# 0 x#)
+     (.putShort b# 1 x#)
+     (.getFloat b# 0)))
+
+(defmacro long-double [x]
+  `(Double/longBitsToDouble ~x))
+
+(defmacro int-float [x]
+  `(Float/intBitsToFloat ~x))
+
 (deftype FloatVectorEngine [])
 (real-vector-blas* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
 (real-vector-blas-plus* FloatVectorEngine "s" float-ptr float mkl_rt mkl_rt ones-float)
@@ -442,12 +492,20 @@
 (real-vector-rng* DoubleVectorEngine "d" double-ptr double)
 
 (deftype LongVectorEngine [])
-(integer-vector-blas* LongVectorEngine "d" coerce-double-ptr mkl_rt)
-(integer-vector-blas-plus* LongVectorEngine "d" double coerce-double-ptr mkl_rt mkl_rt)
+(integer-vector-blas* LongVectorEngine "d" coerce-double-ptr mkl_rt 1)
+(integer-vector-blas-plus* LongVectorEngine "d" long-double coerce-double-ptr mkl_rt mkl_rt 1)
 
 (deftype IntVectorEngine [])
-(integer-vector-blas* IntVectorEngine "s" coerce-float-ptr mkl_rt)
-(integer-vector-blas-plus* IntVectorEngine "s" float coerce-float-ptr mkl_rt mkl_rt)
+(integer-vector-blas* IntVectorEngine "s" coerce-float-ptr mkl_rt 1)
+(integer-vector-blas-plus* IntVectorEngine "s" int-float coerce-float-ptr mkl_rt mkl_rt 1)
+
+(deftype ShortVectorEngine [])
+(integer-vector-blas* ShortVectorEngine "s" coerce-float-ptr mkl_rt 2)
+(integer-vector-blas-plus* ShortVectorEngine "s" short-float coerce-float-ptr mkl_rt mkl_rt 2)
+
+(deftype ByteVectorEngine [])
+(integer-vector-blas* ByteVectorEngine "s" coerce-float-ptr mkl_rt 4)
+(integer-vector-blas-plus* ByteVectorEngine "s" byte-float coerce-float-ptr mkl_rt mkl_rt 4)
 
 ;; ================= Real GE Engine ========================================
 
@@ -825,9 +883,13 @@
 (def double-accessor (->DoublePointerAccessor malloc! free!))
 (def int-accessor (->IntPointerAccessor malloc! free!))
 (def long-accessor (->LongPointerAccessor malloc! free!))
+(def short-accessor (->ShortPointerAccessor malloc! free!))
+(def byte-accessor (->BytePointerAccessor malloc! free!))
 
 (def mkl-int (->MKLIntegerFactory mkl-int int-accessor (->IntVectorEngine)))
-(def mkl-long (->MKLIntegerFactory mkl-long long-accessor (->LongVectorEngine)))
+(def mkl-long (->MKLIntegerFactory mkl-int long-accessor (->LongVectorEngine)))
+(def mkl-short (->MKLIntegerFactory mkl-int short-accessor (->ShortVectorEngine)))
+(def mkl-byte (->MKLIntegerFactory mkl-int byte-accessor (->ByteVectorEngine)))
 
 (def mkl-float
   (->MKLRealFactory mkl-int float-accessor

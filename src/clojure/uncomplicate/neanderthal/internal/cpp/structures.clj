@@ -56,14 +56,6 @@
   (^long get [p ^long i])
   (set [p ^long i ^long val]))
 
-(definterface ShortAccessor ;;TODO move to API
-  (^short get [p ^long i])
-  (set [p ^long i ^short val]))
-
-(definterface ByteAccessor ;;TODO move to API
-  (^byte get [p ^long i])
-  (set [p ^long i ^byte val]))
-
 (defmacro put* [pt p i a]
   `(. ~(with-meta p {:tag pt}) put (long ~i) ~a))
 
@@ -73,7 +65,7 @@
 (defprotocol Destructor
   (destruct [this p]))
 
-(defmacro def-accessor-type [name accessor-interface pointer-class entry-class pointer wrap-fn cast-fn]
+(defmacro def-accessor-type [name accessor-interface pointer-class entry-class pointer wrap-fn cast cast-get]
   `(deftype ~name [construct# destruct#]
      DataAccessor
      (entryType [_#]
@@ -91,7 +83,7 @@
      (wrapPrim [_# v#]
        (~wrap-fn v#))
      (castPrim [_# v#]
-       (~cast-fn v#))
+       (~cast v#))
      DataAccessorProvider
      (data-accessor [this#]
        this#)
@@ -104,17 +96,17 @@
          (or (identical? this# da#) (instance? ~name da#))))
      ~accessor-interface
      (get [_# p# i#]
-       (get* ~pointer-class p# i#))
+       (~cast-get (get* ~pointer-class p# i#)))
      (set [_# p# i# val#]
        (put* ~pointer-class p# i# val#)
        p#)))
 
-(def-accessor-type DoublePointerAccessor RealAccessor DoublePointer Double double-pointer wrap-double double)
-(def-accessor-type FloatPointerAccessor RealAccessor FloatPointer Float float-pointer wrap-float float)
-(def-accessor-type LongPointerAccessor IntegerAccessor LongPointer Long long-pointer wrap-long long)
-(def-accessor-type IntPointerAccessor IntegerAccessor IntPointer Integer int-pointer wrap-int int)
-(def-accessor-type ShortPointerAccessor ShortAccessor ShortPointer Short short-pointer wrap-short short)
-(def-accessor-type BytePointerAccessor ByteAccessor BytePointer Byte byte-pointer wrap-byte byte)
+(def-accessor-type DoublePointerAccessor RealAccessor DoublePointer Double double-pointer wrap-double double double)
+(def-accessor-type FloatPointerAccessor RealAccessor FloatPointer Float float-pointer wrap-float float float)
+(def-accessor-type LongPointerAccessor IntegerAccessor LongPointer Long long-pointer wrap-long long long)
+(def-accessor-type IntPointerAccessor IntegerAccessor IntPointer Integer int-pointer wrap-int int int)
+(def-accessor-type ShortPointerAccessor IntegerAccessor ShortPointer Short short-pointer wrap-short short long)
+(def-accessor-type BytePointerAccessor IntegerAccessor BytePointer Byte byte-pointer wrap-byte byte long)
 
 ;; =======================================================================
 
@@ -407,10 +399,14 @@
     (vector-seq x 0))
   IFn$LLL
   (invokePrim [x i v]
-    (.set x i v))
+    (if (< -1 i n)
+      (.set x i v)
+      (throw (ex-info "Requested element is out of bounds of the vector." {:i i :dim n}))))
   IFn$LL
   (invokePrim [x i]
-    (.entry x i))
+    (if (< -1 i n)
+      (.entry x i)
+      (throw (ex-info "Requested element is out of bounds of the vector." {:i i :dim n}))))
   IFn$L
   (invokePrim [x]
     n)
@@ -418,10 +414,12 @@
   (invoke [x i v]
     (.set x i v))
   (invoke [x i]
-    (.entry x i))
+    (.invokePrim x i))
   (invoke [x]
     n)
   IntegerChangeable
+  (isAllowed [x i]
+    (< -1 i n))
   (set [x val]
     (set-all eng val x)
     x)
@@ -493,11 +491,27 @@
   [^ints source ^IntegerBlockVector destination]
   (transfer-array-vector source destination))
 
+(defmethod transfer! [(Class/forName "[S") IntegerBlockVector]
+  [^longs source ^IntegerBlockVector destination]
+  (transfer-array-vector source destination))
+
+(defmethod transfer! [(Class/forName "[B") IntegerBlockVector]
+  [^ints source ^IntegerBlockVector destination]
+  (transfer-array-vector source destination))
+
 (defmethod transfer! [IntegerBlockVector (Class/forName "[J")]
   [^IntegerBlockVector source ^longs destination]
   (transfer-vector-array source destination))
 
 (defmethod transfer! [IntegerBlockVector (Class/forName "[I")]
+  [^IntegerBlockVector source ^ints destination]
+  (transfer-vector-array source destination))
+
+(defmethod transfer! [IntegerBlockVector (Class/forName "[S")]
+  [^IntegerBlockVector source ^longs destination]
+  (transfer-vector-array source destination))
+
+(defmethod transfer! [IntegerBlockVector (Class/forName "[B")]
   [^IntegerBlockVector source ^ints destination]
   (transfer-vector-array source destination))
 
@@ -526,18 +540,22 @@
     (vector-seq x 0))
   IFn$LDD
   (invokePrim [x i v]
-    (.set x i v))
+    (if (< -1 i n)
+      (.set x i v)
+      (throw (ex-info "Requested element is out of bounds of the vector." {:i i :dim n}))))
   IFn$LD
   (invokePrim [x i]
-    (.entry x i))
+    (if (< -1 i n)
+      (.entry x i)
+      (throw (ex-info "Requested element is out of bounds of the vector." {:i i :dim n}))))
   IFn$L
   (invokePrim [x]
     n)
   IFn
   (invoke [x i v]
-    (.set x i v))
+    (.invokePrim x i v))
   (invoke [x i]
-    (.entry x i))
+    (.invokePrim x i))
   (invoke [x]
     n)
   RealChangeable
@@ -630,6 +648,7 @@
 (defmethod transfer! [RealBlockVector (Class/forName "[F")]
   [^RealBlockVector source ^floats destination]
   (transfer-vector-array source destination))
+
 
 ;; ======================= Compressed Sparse Vector ======================================
 ;; TODO move to API
@@ -995,7 +1014,7 @@
     (.fd stor))
   RealChangeable
   (isAllowed [a i j]
-    true)
+    (and (< -1 i m) (-1 j n)))
   (set [a val]
     (if-not (Double/isNaN val)
       (set-all eng val a)
