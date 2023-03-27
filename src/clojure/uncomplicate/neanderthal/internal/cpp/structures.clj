@@ -26,7 +26,7 @@
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [printing :refer [print-vector print-ge print-uplo print-banded print-diagonal]]
-    [common :refer [dense-rows dense-cols dense-dias require-trf]]
+    [common :refer [dense-rows dense-cols dense-dias require-trf real-accessor]]
     [navigation :refer :all]]
    [uncomplicate.neanderthal.internal.host.fluokitten :refer :all])
   (:import [java.nio Buffer ByteBuffer]
@@ -39,22 +39,11 @@
             VectorSpace Vector RealVector Matrix IntegerVector DataAccessor RealChangeable
             IntegerChangeable RealNativeMatrix RealNativeVector IntegerNativeVector DenseStorage
             FullStorage LayoutNavigator RealLayoutNavigator Region MatrixImplementation GEMatrix
-            UploMatrix BandedMatrix PackedMatrix DiagonalMatrix]))
+            UploMatrix BandedMatrix PackedMatrix DiagonalMatrix RealAccessor IntegerAccessor]))
 
 (declare real-block-vector integer-block-vector cs-vector integer-ge-matrix real-ge-matrix)
 
 ;; ================ Pointer data accessors  ====================================
-
-(definterface RealAccessor ;;TODO move to API. Replace RealBufferAccessor, since there's no need to specify Buffer.
-  (^double get [p ^long i])
-  (set [p ^long i ^double val]))
-
-(defn real-accessor ^RealAccessor [provider]
-  (data-accessor provider))
-
-(definterface IntegerAccessor ;;TODO move to API
-  (^long get [p ^long i])
-  (set [p ^long i ^long val]))
 
 (defmacro put* [pt p i a]
   `(. ~(with-meta p {:tag pt}) put (long ~i) ~a))
@@ -362,15 +351,15 @@
        ([this# v# vs#]
         (vctr (.-fact this#) (cons v# vs#))))))
 
-(defmacro extend-vector-fluokitten [t cast]
+(defmacro extend-vector-fluokitten [t cast indexed-fn]
   `(extend ~t
      Functor
      {:fmap (vector-fmap ~t ~cast)}
      PseudoFunctor
      {:fmap! (vector-fmap identity ~t ~cast)}
      Foldable
-     {:fold vector-fold
-      :foldmap (vector-foldmap ~t ~cast)}
+     {:fold (vector-fold ~t ~cast ~cast)
+      :foldmap (vector-foldmap ~t ~cast ~cast ~indexed-fn)}
      Magma
      {:op (constantly vector-op)}))
 
@@ -412,7 +401,7 @@
     n)
   IFn
   (invoke [x i v]
-    (.set x i v))
+    (.invokePrim x i v))
   (invoke [x i]
     (.invokePrim x i))
   (invoke [x]
@@ -459,7 +448,7 @@
 
 (extend-base IntegerBlockVector)
 (extend-block-vector IntegerBlockVector integer-block-vector integer-ge-matrix)
-(extend-vector-fluokitten IntegerBlockVector long)
+(extend-vector-fluokitten IntegerBlockVector long IFn$LLL)
 
 (def integer-block-vector (partial block-vector ->IntegerBlockVector))
 
@@ -601,7 +590,7 @@
 
 (extend-base RealBlockVector)
 (extend-block-vector RealBlockVector real-block-vector real-ge-matrix)
-(extend-vector-fluokitten RealBlockVector double)
+(extend-vector-fluokitten RealBlockVector double IFn$LDD)
 
 (def real-block-vector (partial block-vector ->RealBlockVector))
 
@@ -951,15 +940,15 @@
      (trdet [a#]
        (require-trf))))
 
-(defmacro extend-matrix-fluokitten [t cast]
+(defmacro extend-matrix-fluokitten [t cast typed-navigator typed-accessor]
   `(extend ~t
      Functor
-     {:fmap (matrix-fmap ~cast)}
+     {:fmap (matrix-fmap ~typed-navigator ~typed-accessor ~cast)}
      PseudoFunctor
-     {:fmap! (matrix-fmap identity ~cast)}
+     {:fmap! (matrix-fmap ~typed-navigator ~typed-accessor identity ~cast)}
      Foldable
-     {:fold matrix-fold
-      :foldmap matrix-foldmap}
+     {:fold (matrix-fold ~typed-navigator ~cast)
+      :foldmap (matrix-foldmap ~typed-navigator ~cast)}
      Magma
      {:op (constantly matrix-op)}))
 
@@ -1083,7 +1072,7 @@
 
 (extend-base RealGEMatrix)
 (extend-ge-matrix RealGEMatrix real-block-vector real-ge-matrix)
-(extend-matrix-fluokitten RealGEMatrix double)
+(extend-matrix-fluokitten RealGEMatrix double real-navigator real-accessor)
 
 (defn ge-matrix
   ([constructor fact master buf-ptr m n ofst nav ^FullStorage stor reg]

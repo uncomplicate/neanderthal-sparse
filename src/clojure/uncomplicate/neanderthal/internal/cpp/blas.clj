@@ -15,7 +15,7 @@
              [block :refer [buffer offset stride]]
              [core :refer [dim entry]]]
             [uncomplicate.neanderthal.internal
-             [api :refer [iamax engine data-accessor navigator storage region]]
+             [api :refer [iamax engine navigator storage region]]
              [common :refer [check-eq-navigators]]
              [navigation :refer [full-storage]]]
             [uncomplicate.neanderthal.internal.cpp.mkl.constants :refer :all])
