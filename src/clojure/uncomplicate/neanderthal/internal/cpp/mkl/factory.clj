@@ -67,7 +67,7 @@
   "Integer BLAS operations are not supported. Please transform data to float or double.")
 
 (def ^{:no-doc true :const true} SHORT_UNSUPPORTED_MSG
-  "BLAS operation on short vectors are supported only on dimensions divisible by 2 (short) or 4 (byte).")
+  "BLAS operation on short integers are supported only on dimensions divisible by 2 (short) or 4 (byte).")
 
 (defmacro patch-vector-method [chunk blas method ptr x y]
   (if (= 1 chunk)
@@ -137,7 +137,7 @@
      (srt [_# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))))
 
-(defmacro integer-vector-blas-plus* [name t cast ptr blas lapack chunk]
+(defmacro integer-vector-blas-plus* [name t ptr cast blas lapack chunk]
   `(extend-type ~name
      BlasPlus
      (amax [_# _#]
@@ -493,19 +493,75 @@
 
 (deftype LongVectorEngine [])
 (integer-vector-blas* LongVectorEngine "d" coerce-double-ptr mkl_rt 1)
-(integer-vector-blas-plus* LongVectorEngine "d" long-double coerce-double-ptr mkl_rt mkl_rt 1)
+(integer-vector-blas-plus* LongVectorEngine "d" coerce-double-ptr long-double mkl_rt mkl_rt 1)
 
 (deftype IntVectorEngine [])
 (integer-vector-blas* IntVectorEngine "s" coerce-float-ptr mkl_rt 1)
-(integer-vector-blas-plus* IntVectorEngine "s" int-float coerce-float-ptr mkl_rt mkl_rt 1)
+(integer-vector-blas-plus* IntVectorEngine "s" coerce-float-ptr int-float mkl_rt mkl_rt 1)
 
 (deftype ShortVectorEngine [])
 (integer-vector-blas* ShortVectorEngine "s" coerce-float-ptr mkl_rt 2)
-(integer-vector-blas-plus* ShortVectorEngine "s" short-float coerce-float-ptr mkl_rt mkl_rt 2)
+(integer-vector-blas-plus* ShortVectorEngine "s" coerce-float-ptr short-float mkl_rt mkl_rt 2)
 
 (deftype ByteVectorEngine [])
 (integer-vector-blas* ByteVectorEngine "s" coerce-float-ptr mkl_rt 4)
-(integer-vector-blas-plus* ByteVectorEngine "s" byte-float coerce-float-ptr mkl_rt mkl_rt 4)
+(integer-vector-blas-plus* ByteVectorEngine "s" coerce-float-ptr byte-float mkl_rt mkl_rt 4)
+
+;; ================= Integer GE Engine ========================================
+
+(defmacro patch-ge-copy [chunk blas method ptr a b]
+  (if (= 1 chunk)
+    `(when (< 0 (dim ~a))
+       (let [stor-b# (full-storage ~b)
+             no-trans# (= (navigator ~a) (navigator ~b))]
+         (. ~blas ~method ~(byte (int \C)) (byte (int (if no-trans# \N \T)))
+            (if no-trans# (.sd stor-b#) (.fd stor-b#)) (if no-trans# (.fd stor-b#) (.sd stor-b#))
+            1.0 (~ptr ~a) (stride ~a) (~ptr ~b) (.ld stor-b#))))
+    `(if (or (and (.isGapless (storage ~a)) (= 0 (rem (dim ~a)) ~chunk))
+             (and (= 0 (rem (mrows ~a) ~chunk)) (= 0 (rem (ncols ~a) ~chunk))))
+       (let [stor-b# (full-storage ~b)
+             no-trans# (= (navigator ~a) (navigator ~b))]
+         (. ~blas ~method ~(byte (int \C)) (byte (int (if no-trans# \N \T)))
+            (quot (if no-trans# (.sd stor-b#) (.fd stor-b#)) ~chunk)
+            (quot (if no-trans# (.fd stor-b#) (.sd stor-b#)) ~chunk)
+            1.0 (~ptr ~a) (quot (stride ~a) ~chunk) (~ptr ~b) (quot (.ld stor-b#) ~chunk)))
+       (dragan-says-ex SHORT_UNSUPPORTED_MSG {:mrows (mrows ~a) :ncols (ncols ~a)}))))
+
+(defmacro integer-ge-blas* [name t ptr cast blas lapack chunk]
+  `(extend-type ~name
+     Blas
+     (swap [_# a# b#]
+       (ge-map ~blas ~(cblas t 'swap) ~ptr a# b#)
+       a#)
+     (copy [_# a# b#]
+       (patch-ge-copy ~chunk ~blas ~(cblas "mkl_" t 'omatcopy) ~ptr a# b#)
+       b#)
+     (dot [_# a# b#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (nrm1 [_# a#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (nrm2 [_# a#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (nrmi [_# a#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (asum [_# a#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (scal [_# alpha# a#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (axpy [_# alpha# a# b#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (mv
+       ([_# alpha# a# x# beta# y#]
+        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+       ([_# a# _#]
+        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG))))
+     (rk [_# alpha# x# y# a#]
+       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (mm
+       ([_# alpha# a# b# _#]
+        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+       ([_# alpha# a# b# beta# c# _#]
+        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG))))))
 
 ;; ================= Real GE Engine ========================================
 
@@ -713,6 +769,17 @@
 (real-matrix-math* DoubleGEEngine "d" double-ptr double)
 (real-ge-rng* DoubleGEEngine "d" double-ptr double)
 
+
+(deftype LongGEEngine [])
+(integer-ge-blas* DoubleGEEngine "d" coerce-double-ptr long-double mkl_rt mkl_rt 1)
+
+(deftype IntGEEngine [])
+(integer-ge-blas* FloatGEEngine "s" coerce-float-ptr int-float mkl_rt mkl_rt 1)
+
+(deftype ShortGEEngine [])
+
+(deftype ByteGEEngine [])
+
 ;; ========================= Sparse Vector engines ============================================
 
 (def ^{:no-doc true :const true} MIXED_UNSUPPORTED_MSG
@@ -853,7 +920,7 @@
     cs-vector-eng)
   )
 
-(deftype MKLIntegerFactory [index-fact ^DataAccessor da vector-eng]
+(deftype MKLIntegerFactory [index-fact ^DataAccessor da vector-eng ge-eng]
   DataAccessorProvider
   (data-accessor [_]
     da)
@@ -876,8 +943,15 @@
       (when init
         (.initialize da (.buffer ^Block res)))
       res))
+  (create-ge [this m n column? init]
+    (let-release [res (integer-ge-matrix this m n column?)]
+      (when init
+        (.initialize da (.buffer ^Block res)))
+      res))
   (vector-engine [_]
-    vector-eng))
+    vector-eng)
+  (ge-engine [_]
+    ge-eng))
 
 (def float-accessor (->FloatPointerAccessor malloc! free!))
 (def double-accessor (->DoublePointerAccessor malloc! free!))
@@ -886,10 +960,10 @@
 (def short-accessor (->ShortPointerAccessor malloc! free!))
 (def byte-accessor (->BytePointerAccessor malloc! free!))
 
-(def mkl-int (->MKLIntegerFactory mkl-int int-accessor (->IntVectorEngine)))
-(def mkl-long (->MKLIntegerFactory mkl-int long-accessor (->LongVectorEngine)))
-(def mkl-short (->MKLIntegerFactory mkl-int short-accessor (->ShortVectorEngine)))
-(def mkl-byte (->MKLIntegerFactory mkl-int byte-accessor (->ByteVectorEngine)))
+(def mkl-int (->MKLIntegerFactory mkl-int int-accessor (->IntVectorEngine) (->IntGEEngine)))
+(def mkl-long (->MKLIntegerFactory mkl-int long-accessor (->LongVectorEngine) (->LongGEEngine)))
+(def mkl-short (->MKLIntegerFactory mkl-int short-accessor (->ShortVectorEngine) (->ShortGEEngine)))
+(def mkl-byte (->MKLIntegerFactory mkl-int byte-accessor (->ByteVectorEngine) (->ByteGEEngine)))
 
 (def mkl-float
   (->MKLRealFactory mkl-int float-accessor

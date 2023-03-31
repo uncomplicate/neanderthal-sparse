@@ -19,27 +19,27 @@
                                      double-pointer long-pointer int-pointer short-pointer byte-pointer
                                      element-count]]
    [uncomplicate.neanderthal
-    [core :refer [transfer! copy! dim subvector vctr ge]]
-    [real :refer [entry entry!]]
+    [core :refer [transfer! copy! dim subvector vctr ge matrix-type mrows ncols]]
     [math :refer [ceil]]
     [block :refer [entry-type offset stride buffer column?]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [printing :refer [print-vector print-ge print-uplo print-banded print-diagonal]]
-    [common :refer [dense-rows dense-cols dense-dias require-trf real-accessor]]
+    [common :refer [dense-rows dense-cols dense-dias require-trf real-accessor integer-accessor]]
     [navigation :refer :all]]
    [uncomplicate.neanderthal.internal.host.fluokitten :refer :all])
   (:import [java.nio Buffer ByteBuffer]
            [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
-            IFn$LDD IFn$LLDD IFn$LLL]
+            IFn$LDD IFn$LLDD IFn$LLL IFn$LLLL]
            org.bytedeco.mkl.global.mkl_rt
            [org.bytedeco.javacpp FloatPointer DoublePointer LongPointer IntPointer ShortPointer
             BytePointer]
            [uncomplicate.neanderthal.internal.api Block
             VectorSpace Vector RealVector Matrix IntegerVector DataAccessor RealChangeable
-            IntegerChangeable RealNativeMatrix RealNativeVector IntegerNativeVector DenseStorage
-            FullStorage LayoutNavigator RealLayoutNavigator Region MatrixImplementation GEMatrix
-            UploMatrix BandedMatrix PackedMatrix DiagonalMatrix RealAccessor IntegerAccessor]))
+            IntegerChangeable RealNativeMatrix IntegerNativeMatrix RealNativeVector
+            IntegerNativeVector DenseStorage FullStorage LayoutNavigator Region
+            MatrixImplementation GEMatrix UploMatrix BandedMatrix PackedMatrix DiagonalMatrix
+            RealAccessor IntegerAccessor]))
 
 (declare real-block-vector integer-block-vector cs-vector integer-ge-matrix real-ge-matrix)
 
@@ -161,11 +161,11 @@
       (if (and (<= (.mrows ~destination) (.mrows ~source)) (<= (.ncols ~destination) (.ncols ~source)))
         (if (and (compatible? ~source ~destination) (fits? ~source ~destination) ~condition)
           (copy (engine ~source) ~source ~destination)
-          (let [nav# (real-navigator ~destination)
+          (let [flipper# (real-flipper (navigator ~destination))
                 da# (~typed-accessor ~destination)
                 buf# (.buffer ~destination)
                 ofst# (.offset ~destination)]
-            (doall-layout ~destination i# j# idx# (.set da# buf# (+ ofst# idx#) (.get nav# ~source i# j#)))))
+            (doall-layout ~destination i# j# idx# (.set da# buf# (+ ofst# idx#) (.get flipper# ~source i# j#)))))
         (dragan-says-ex "There is not enough entries in the source matrix. Take appropriate submatrix of the destination.."
                         {:source (info ~source) :destination (info ~destination)}))
       ~destination))
@@ -233,6 +233,18 @@
                        (when (< cnt# dim#)
                          (.set ~destination cnt# (.get da# buf# (+ ofst# idx#)))))))
      ~destination))
+
+(defmacro matrix-alter [ifn-oo ifn-lloo f nav stor reg da buf]
+  `(if (instance? ~ifn-oo ~f)
+     (doall-layout ~nav ~stor ~reg i# j# idx#
+                   (.set ~da ~buf idx# (.invokePrim ~(with-meta f {:tag ifn-oo}) (.get ~da ~buf idx#))))
+     (if (.isRowMajor ~nav)
+       (doall-layout ~nav ~stor ~reg i# j# idx#
+                     (.set ~da ~buf idx# (.invokePrim ~(with-meta f {:tag ifn-lloo})
+                                                      j# i# (.get ~da ~buf idx#))))
+       (doall-layout ~nav ~stor ~reg i# j# idx#
+                     (.set ~da ~buf idx# (.invokePrim ~(with-meta f {:tag ifn-lloo})
+                                                      i# j# (.get ~da ~buf idx#)))))))
 
 ;; =======================================================================
 
@@ -940,38 +952,36 @@
      (trdet [a#]
        (require-trf))))
 
-(defmacro extend-matrix-fluokitten [t cast typed-navigator typed-accessor]
+(defmacro extend-matrix-fluokitten [t cast typed-flipper typed-accessor]
   `(extend ~t
      Functor
-     {:fmap (matrix-fmap ~typed-navigator ~typed-accessor ~cast)}
+     {:fmap (matrix-fmap ~typed-flipper ~typed-accessor ~cast)}
      PseudoFunctor
-     {:fmap! (matrix-fmap ~typed-navigator ~typed-accessor identity ~cast)}
+     {:fmap! (matrix-fmap ~typed-flipper ~typed-accessor identity ~cast)}
      Foldable
-     {:fold (matrix-fold ~typed-navigator ~cast)
-      :foldmap (matrix-foldmap ~typed-navigator ~cast)}
+     {:fold (matrix-fold ~typed-flipper ~cast)
+      :foldmap (matrix-foldmap ~typed-flipper ~cast)}
      Magma
      {:op (constantly matrix-op)}))
 
 ;; =================== Real Matrix =============================================
 
-(defn matrix-equals [^RealNativeMatrix a ^RealNativeMatrix b]
-  (or (identical? a b) (= (.buffer a) (.buffer b))
-      (and (instance? (class a) b)
-           (= (.matrixType ^MatrixImplementation a) (.matrixType ^MatrixImplementation b))
-           (compatible? a b) (= (.mrows a) (.mrows b)) (= (.ncols a) (.ncols b))
-           (let [nav (real-navigator a)
-                 da ^RealAccessor (data-accessor a)
-                 buf (.buffer a)]
-             (and-layout a i j idx (= (.get da buf idx) (.get nav b i j)))))))
+(defmacro matrix-equals [flipper da a b]
+  `(or (identical? ~a ~b) (= (.buffer ~a) (buffer ~b))
+       (and (instance? (class ~a) ~b)
+            (= (.matrixType ~a) (matrix-type ~b))
+            (compatible? ~a ~b) (= (.mrows ~a) (mrows ~b)) (= (.ncols ~a) (ncols ~b))
+            (let [buf# (.buffer ~a)]
+              (and-layout ~a i# j# idx# (= (.get ~da buf# idx#) (.get ~flipper ~b i# j#)))))))
 
-(deftype RealGEMatrix [^RealLayoutNavigator nav ^FullStorage stor ^Region reg
-                       fact ^RealAccessor da eng master
-                       buf-ptr ^long m ^long n]
+(deftype RealGEMatrix [^LayoutNavigator nav ^FullStorage stor ^Region reg
+                       fact ^RealAccessor da eng master buf-ptr ^long m ^long n]
   Object
   (hashCode [a]
     (-> (hash :RealGEMatrix) (hash-combine m) (hash-combine n) (hash-combine (nrm2 eng a))))
   (equals [a b]
-    (matrix-equals a b))
+    (let [fl (real-flipper nav)]
+      (matrix-equals fl da a b)))
   (toString [a]
     (format "#RealGEMatrix[%s, mxn:%dx%d, layout%s]"
             (entry-type da) m n (dec-property (.layout nav))))
@@ -987,15 +997,21 @@
     (map #(seq (.stripe nav a %)) (range 0 (.fd stor))))
   IFn$LLDD
   (invokePrim [a i j v]
-    (entry! a i j v))
+    (if (and (< -1 i m) (-1 j n))
+      (.set a i j v)
+      (throw (ex-info "Requested element is out of bounds of the matrix."
+                      {:i i :j j :mrows m :ncols n}))))
   IFn$LLD
   (invokePrim [a i j]
-    (entry a i j))
+    (if (and (< -1 i m) (-1 j n))
+      (.entry a i j)
+      (throw (ex-info "The element you're trying to set is out of bounds of the matrix."
+                      {:i i :j j :mrows m :ncols n}))))
   IFn
   (invoke [a i j v]
-    (entry! a i j v))
+    (.invokePrim a i j v))
   (invoke [a i j]
-    (entry a i j))
+    (.invokePrim a i j))
   (invoke [a]
     (.fd stor))
   IFn$L
@@ -1017,11 +1033,7 @@
   (setBoxed [a i j val]
     (.set a i j val))
   (alter [a f]
-    (if (instance? IFn$DD f)
-      (doall-layout nav stor reg i j idx
-                    (.set da buf-ptr idx (.invokePrim ^IFn$DD f (.get da buf-ptr idx))))
-      (doall-layout nav stor reg i j idx
-                    (.set da buf-ptr idx (.invokePrimitive nav f i j (.get da buf-ptr idx)))))
+    (matrix-alter IFn$DD IFn$LLDD f nav stor reg da buf-ptr)
     a)
   (alter [a i j f]
     (let [idx (.index nav stor i j)]
@@ -1072,7 +1084,7 @@
 
 (extend-base RealGEMatrix)
 (extend-ge-matrix RealGEMatrix real-block-vector real-ge-matrix)
-(extend-matrix-fluokitten RealGEMatrix double real-navigator real-accessor)
+(extend-matrix-fluokitten RealGEMatrix double real-flipper real-accessor)
 
 (defn ge-matrix
   ([constructor fact master buf-ptr m n ofst nav ^FullStorage stor reg]
@@ -1146,3 +1158,176 @@
 (defmethod transfer! [RealGEMatrix IntegerNativeVector]
   [^RealGEMatrix source ^IntegerBlockVector destination]
   (transfer-matrix-vector real-accessor source destination))
+
+;; =================== Integer Matrix =============================================
+
+(deftype IntegerGEMatrix [^LayoutNavigator nav ^FullStorage stor ^Region reg
+                          fact ^IntegerAccessor da eng master
+                          buf-ptr ^long m ^long n]
+  Object
+  (hashCode [a]
+    (-> (hash :IntegerGEMatrix) (hash-combine m) (hash-combine n) (hash-combine (nrm2 eng a))))
+  (equals [a b]
+    (let [fl (integer-flipper nav)]
+      (matrix-equals fl da a b)))
+  (toString [a]
+    (format "#IntegerGEMatrix[%s, mxn:%dx%d, layout%s]"
+            (entry-type da) m n (dec-property (.layout nav))))
+  GEMatrix
+  (matrixType [_]
+    :ge)
+  (isTriangular [_]
+    false)
+  (isSymmetric [_]
+    false)
+  Seqable
+  (seq [a]
+    (map #(seq (.stripe nav a %)) (range 0 (.fd stor))))
+  IFn$LLDD
+  (invokePrim [a i j v]
+    (if (and (< -1 i m) (-1 j n))
+      (.set a i j v)
+      (throw (ex-info "Requested element is out of bounds of the matrix."
+                      {:i i :j j :mrows m :ncols n}))))
+  IFn$LLD
+  (invokePrim [a i j]
+    (if (and (< -1 i m) (-1 j n))
+      (.entry a i j)
+      (throw (ex-info "The element you're trying to set is out of bounds of the matrix."
+                      {:i i :j j :mrows m :ncols n}))))
+  IFn
+  (invoke [a i j v]
+    (.invokePrim a i j v))
+  (invoke [a i j]
+    (.invokePrim a i j))
+  (invoke [a]
+    (.fd stor))
+  IFn$L
+  (invokePrim [a]
+    (.fd stor))
+  IntegerChangeable
+  (isAllowed [a i j]
+    (and (< -1 i m) (-1 j n)))
+  (set [a val]
+    (if-not (Double/isNaN val)
+      (set-all eng val a)
+      (doall-layout nav stor reg i j idx (.set da buf-ptr idx val)))
+    a)
+  (set [a i j val]
+    (.set da buf-ptr (.index nav stor i j) val)
+    a)
+  (setBoxed [a val]
+    (.set a val))
+  (setBoxed [a i j val]
+    (.set a i j val))
+  (alter [a f]
+    (matrix-alter IFn$LL IFn$LLLL f nav stor reg da buf-ptr)
+    a)
+  (alter [a i j f]
+    (let [idx (.index nav stor i j)]
+      (.set da buf-ptr idx (.invokePrim ^IFn$LL f (.get da buf-ptr idx)))
+      a))
+  IntegerNativeMatrix
+  (buffer [_]
+    buf-ptr)
+  (offset [_]
+    0)
+  (stride [_]
+    (.ld stor))
+  (isContiguous [_]
+    (.isGapless stor))
+  (dim [_]
+    (* m n))
+  (mrows [_]
+    m)
+  (ncols [_]
+    n)
+  (entry [a i j]
+    (.get da buf-ptr (.index nav stor i j)))
+  (boxedEntry [a i j]
+    (.entry a i j))
+  (row [a i]
+    (integer-block-vector fact false buf-ptr n (.index nav stor i 0)
+                          (if (.isRowMajor nav) 1 (.ld stor))))
+  (rows [a]
+    (dense-rows a))
+  (col [a j]
+    (integer-block-vector fact false buf-ptr m (.index nav stor 0 j)
+                          (if (.isColumnMajor nav) 1 (.ld stor))))
+  (cols [a]
+    (dense-cols a))
+  (dia [a]
+    (integer-block-vector fact false buf-ptr (min m n) 0 (inc (.ld stor))))
+  (dia [a k]
+    (if (< 0 k)
+      (integer-block-vector fact false buf-ptr (min m (- n k)) (.index nav stor 0 k) (inc (.ld stor)))
+      (integer-block-vector fact false buf-ptr (min (+ m k) n) (.index nav stor (- k) 0) (inc (.ld stor)))))
+  (dias [a]
+    (dense-dias a))
+  (submatrix [a i j k l]
+    (integer-ge-matrix fact false buf-ptr k l (.index nav stor i j)
+                       nav (full-storage (.isColumnMajor nav) k l (.ld stor)) (ge-region k l)))
+  (transpose [a]
+    (integer-ge-matrix fact false buf-ptr n m 0 (flip nav) stor (flip reg))))
+
+(extend-base IntegerGEMatrix)
+(extend-ge-matrix IntegerGEMatrix integer-block-vector integer-ge-matrix)
+(extend-matrix-fluokitten IntegerGEMatrix long integer-flipper integer-accessor)
+
+(def integer-ge-matrix (partial ge-matrix ->IntegerGEMatrix))
+
+(defmethod transfer! [clojure.lang.Sequential IntegerGEMatrix]
+  [source ^IntegerGEMatrix destination]
+  (transfer-seq-matrix integer-accessor source destination))
+
+(defmethod transfer! [IntegerGEMatrix IntegerGEMatrix] ;;TODO IntegerNativeMatrix, once its merged with neanderthal
+  [^IntegerGEMatrix source ^IntegerGEMatrix destination]
+  (transfer-matrix-matrix integer-accessor source destination))
+
+(defmethod transfer! [(Class/forName "[D") IntegerNativeMatrix]
+  [^doubles source ^IntegerNativeMatrix destination]
+  (transfer-array-matrix integer-accessor source destination))
+
+(defmethod transfer! [(Class/forName "[F") IntegerNativeMatrix]
+  [^floats source ^IntegerNativeMatrix destination]
+  (transfer-array-matrix integer-accessor source destination))
+
+(defmethod transfer! [(Class/forName "[J") IntegerNativeMatrix]
+  [^longs source ^IntegerNativeMatrix destination]
+  (transfer-array-matrix integer-accessor source destination))
+
+(defmethod transfer! [(Class/forName "[I") IntegerNativeMatrix]
+  [^ints source ^IntegerNativeMatrix destination]
+  (transfer-array-matrix integer-accessor source destination))
+
+(defmethod transfer! [(Class/forName "[S") IntegerNativeMatrix]
+  [^shorts source ^IntegerNativeMatrix destination]
+  (transfer-array-matrix integer-accessor source destination))
+
+(defmethod transfer! [(Class/forName "[B") IntegerNativeMatrix]
+  [^bytes source ^IntegerNativeMatrix destination]
+  (transfer-array-matrix integer-accessor source destination))
+
+(defmethod transfer! [IntegerNativeMatrix (Class/forName "[J")]
+  [^IntegerNativeMatrix source ^longs destination]
+  (transfer-matrix-array integer-accessor source destination))
+
+(defmethod transfer! [IntegerNativeMatrix (Class/forName "[I")]
+  [^IntegerNativeMatrix source ^ints destination]
+  (transfer-matrix-array integer-accessor source destination))
+
+(defmethod transfer! [IntegerNativeVector IntegerGEMatrix]
+  [^IntegerNativeVector source ^IntegerGEMatrix destination]
+  (transfer-vector-matrix integer-accessor source destination))
+
+(defmethod transfer! [IntegerGEMatrix IntegerNativeVector]
+  [^IntegerGEMatrix source ^IntegerBlockVector destination]
+  (transfer-matrix-vector integer-accessor source destination))
+
+(defmethod transfer! [IntegerNativeVector IntegerGEMatrix]
+  [^IntegerNativeVector source ^IntegerGEMatrix destination]
+  (transfer-vector-matrix integer-accessor source destination))
+
+(defmethod transfer! [IntegerGEMatrix IntegerNativeVector]
+  [^IntegerGEMatrix source ^IntegerBlockVector destination]
+  (transfer-matrix-vector integer-accessor source destination))
