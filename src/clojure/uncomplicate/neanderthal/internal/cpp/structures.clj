@@ -679,7 +679,7 @@
       (and  (= nzx (entries y)) (= indx (indices y)))
       :default :false))
   (toString [_]
-    (format "#CSVector[%s, n:%d]" (entry-type (data-accessor nzx)) n))
+    (format "#CSVector[%s, n:%d, nnz:%d]" (entry-type (data-accessor nzx)) n (dim nzx)))
   Info
   (info [x]
     {:entry-type (.entryType (data-accessor nzx))
@@ -775,8 +775,8 @@
   ([^long n indx nzx]
    (let [fact (factory nzx)]
      (if (= (factory indx) (index-factory nzx))
-       (if (and (<= 0 (dim nzx) n) (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx))
-                (fits? nzx indx))
+       (if (and (<= 0 (dim nzx) n) (<= 0 (dim indx)) (fits? nzx indx)
+                (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx)))
          (->CSVector fact (cs-vector-engine fact) nzx indx n)
          (throw (ex-info "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx})));;TODO error message
        (throw (ex-info "Incompatible index vector" {:required (index-factory nzx) :provided (factory indx)})))))
@@ -790,27 +790,33 @@
 
 (defmethod transfer! [CSVector CSVector]
   [source destination]
-  (transfer! (entries source) (entries destination)))
+  (transfer! (entries source) (entries destination))
+  destination)
 
 (defmethod transfer! [clojure.lang.Sequential CSVector]
   [source destination]
-  (transfer! source (entries destination)))
+  (transfer! source (entries destination))
+  destination)
 
 (defmethod transfer! [(Class/forName "[D") CSVector]
   [source destination]
-  (transfer! source (entries destination)))
+  (transfer! source (entries destination))
+  destination)
 
 (defmethod transfer! [(Class/forName "[F") CSVector]
   [source destination]
-  (transfer! source (entries destination)))
+  (transfer! source (entries destination))
+  destination)
 
 (defmethod transfer! [(Class/forName "[J") CSVector]
   [source destination]
-  (transfer! source (entries destination)))
+  (transfer! source (entries destination))
+  destination)
 
 (defmethod transfer! [(Class/forName "[I") CSVector]
   [source destination]
-  (transfer! source (entries destination)))
+  (transfer! source (entries destination))
+  destination)
 
 (defmethod transfer! [CSVector (Class/forName "[D")]
   [source destination]
