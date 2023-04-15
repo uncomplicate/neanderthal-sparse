@@ -100,7 +100,7 @@
 ;; =======================================================================
 
 ;; ================ from buffer-block ====================================
-(defn ^:private vector-seq [^Vector vector ^long i]
+(defn vector-seq [^Vector vector ^long i]
   (lazy-seq
    (if (< -1 i (.dim vector))
      (cons (.boxedEntry vector i) (vector-seq vector (inc i)))
@@ -166,7 +166,7 @@
                 buf# (.buffer ~destination)
                 ofst# (.offset ~destination)]
             (doall-layout ~destination i# j# idx# (.set da# buf# (+ ofst# idx#) (.get flipper# ~source i# j#)))))
-        (dragan-says-ex "There is not enough entries in the source matrix. Take appropriate submatrix of the destination.."
+        (dragan-says-ex "There is not enough entries in the source matrix. Provide an appropriate submatrix of the destination."
                         {:source (info ~source) :destination (info ~destination)}))
       ~destination))
   ([typed-accessor source destination]
@@ -250,10 +250,11 @@
 
 (defn block-vector
   ([constructor fact master buf-ptr n ofst strd]
-   (let [da (data-accessor fact)]
+   (let [da (data-accessor fact)
+         buf-ptr (pointer buf-ptr ofst)]
      (if (<= 0 n (.count da buf-ptr))
        (constructor fact da (vector-engine fact) master (pointer buf-ptr ofst) n strd)
-       (throw (ex-info "Insufficient buffer size." {:n n :buffer-size (.count da buf-ptr)})))))
+       (throw (ex-info "Insufficient buffer size." {:n n :offset ofst :buffer-size (.count da buf-ptr)})))))
   ([constructor fact master buf-ptr n strd]
    (block-vector constructor fact master buf-ptr n 0 strd))
   ([constructor fact n strd]
@@ -351,7 +352,7 @@
      (fits? [this# y#]
        (= (.-n this#) (dim y#)))
      (device [_#]
-       :cpu)
+       :cpu) ;; TODO Perhaps move this to factory?
      Monoid
      (id [this#]
        (~block-vector (.-fact this#) 0))
@@ -663,7 +664,8 @@
   (indices [this]))
 
 (defprotocol SparseFactory ;;TODO move to api.
-  (cs-vector-engine [this]))
+  (cs-vector-engine [this])
+  (csr-engine [this]))
 
 (deftype CSVector [fact eng ^Block nzx ^IntegerVector indx ^long n]
   Object
@@ -757,9 +759,9 @@
   (dim [_]
     n)
   SparseCompressed
-  (entries [this]
+  (entries [_]
     nzx)
-  (indices [this]
+  (indices [_]
     indx))
 
 (extend-type RealBlockVector
@@ -772,10 +774,12 @@
 (defn cs-vector
   ([^long n indx nzx]
    (let [fact (factory nzx)]
-     (if (and (<= 0 (dim nzx) n) (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx))
-              (fits? nzx indx))
-       (->CSVector fact (cs-vector-engine fact) nzx indx n)
-       (throw (ex-info "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx})))));;TODO error message
+     (if (= (factory indx) (index-factory nzx))
+       (if (and (<= 0 (dim nzx) n) (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx))
+                (fits? nzx indx))
+         (->CSVector fact (cs-vector-engine fact) nzx indx n)
+         (throw (ex-info "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx})));;TODO error message
+       (throw (ex-info "Incompatible index vector" {:required (index-factory nzx) :provided (factory indx)})))))
   ([fact ^long n indx init]
    (let-release [nzx (create-vector fact (dim indx) init)]
      (cs-vector n indx nzx))))
@@ -880,7 +884,8 @@
         (create-ge (factory fact#) (.-m this#) (.-n this#) (column? (.-nav this#)) true)))
      (host [this#]
        (let-release [res# (raw this#)]
-         (copy (.-eng this#) this# res#)))
+         (copy (.-eng this#) this# res#)
+         res#))
      (native [this#]
        this#)
      Viewable
@@ -1088,9 +1093,10 @@
 
 (defn ge-matrix
   ([constructor fact master buf-ptr m n ofst nav ^FullStorage stor reg]
-   (let [da (data-accessor fact)]
-     (if (<= 0 (* (.capacity stor) (.count da buf-ptr)))
-       (constructor nav stor reg fact da (ge-engine fact) master (pointer buf-ptr ofst) m n)
+   (let [da (data-accessor fact)
+         buf-ptr (pointer buf-ptr ofst)]
+     (if (<= 0 (.capacity stor) (.count da buf-ptr))
+       (constructor nav stor reg fact da (ge-engine fact) master buf-ptr m n)
        (throw (ex-info "Insufficient buffer size."
                        {:dim (.capacity stor) :buffer-size (.count da buf-ptr)})))))
   ([constructor fact m n nav ^FullStorage stor reg]

@@ -15,7 +15,7 @@
             [uncomplicate.neanderthal
              [core :refer [dim entry mrows ncols] :as core]
              [math :refer [f=] :as math]
-             [block :refer [create-data-source initialize buffer offset stride contiguous?]]]
+             [block :refer [create-data-source initialize offset stride contiguous?]]]
             [uncomplicate.neanderthal.internal
              [api :refer :all]
              [navigation :refer [full-storage accu-layout dostripe-layout]]
@@ -25,7 +25,8 @@
              [lapack :refer :all]
              [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
                            vector-imax vector-imin ge-map ge-reduce full-matching-map]]]
-            [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [malloc! free!]])
+            [uncomplicate.neanderthal.internal.cpp.mkl.core
+             :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr export-csr]])
   (:import java.nio.ByteBuffer
            [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
             GEMatrix DenseStorage]
@@ -320,7 +321,7 @@
        (~vector-math ~(math t 'Abs) ~ptr a# y#))
      (linear-frac [_# a# b# scalea# shifta# scaleb# shiftb# y#]
        (~vector-linear-frac ~(math t 'LinearFrac) ~ptr a# b#
-                           (~cast scalea#) (~cast shifta#) (~cast scaleb#) (~cast shiftb#) y#))
+        (~cast scalea#) (~cast shifta#) (~cast scaleb#) (~cast shiftb#) y#))
      (fmod [_# a# b# y#]
        (~vector-math ~(math t 'Fmod) ~ptr a# b# y#))
      (frem [_# a# b# y#]
@@ -659,7 +660,7 @@
      (set-all [_# alpha# a#]
        (with-lapack-check
          (. ~lapack ~(lapacke t 'laset) (.layout (navigator a#)) ~(byte (int \g))
-          (mrows a#) (ncols a#) (~cast alpha#) (~cast alpha#) (~ptr a#) (stride a#)))
+            (mrows a#) (ncols a#) (~cast alpha#) (~cast alpha#) (~ptr a#) (stride a#)))
        a#)
      (axpby [_# alpha# a# beta# b#]
        (ge-axpby ~blas ~(cblas "mkl_" t 'omatadd) ~ptr (~cast alpha#) a# (~cast beta#) b#)
@@ -776,9 +777,9 @@
 (deftype IntGEEngine [])
 (integer-ge-blas* FloatGEEngine "s" coerce-float-ptr int-float mkl_rt mkl_rt 1)
 
-(deftype ShortGEEngine [])
+(deftype ShortGEEngine []) ;; TODO
 
-(deftype ByteGEEngine [])
+(deftype ByteGEEngine []) ;; TODO
 
 ;; ========================= Sparse Vector engines ============================================
 
@@ -882,8 +883,58 @@
 (real-vector-math* DoubleCSVectorEngine "d" double-ptr double)
 (real-cs-vector-sparse-blas* DoubleCSVectorEngine "d" double-ptr int-ptr mkl_rt)
 
+;; =================== Sparse Matrix engines ======================================
+
+(defmacro real-csr-blas* [name t ptr cast]
+  `(extend-type ~name
+     Blas
+     (swap [_# a# b#]
+       (with-release [tmp# (sparse-matrix)]
+         (mkl-sparse-copy (~ptr b#) tmp#)
+         (mkl-sparse-copy (~ptr a#) (~ptr b#))
+         (mkl-sparse-copy tmp# (~ptr a#)))
+       a#)
+     (copy [_# a# b#]
+       (mkl-sparse-copy (~ptr a#) (~ptr b#))
+       b#)
+
+
+     ;; (mv
+     ;;   ([_# alpha# a# x# beta# y#]
+     ;;    (. ~mkl_rt ~(mkl-sparse 't 'mv) (int operation#) (~cast alpha#) (buffer a#) (descr a#)
+     ;;       (~ptr x#) (~cast beta#) (~ptr y#))
+     ;;    y#)
+     ;;   ([_# a# _#]
+     ;;    (dragan-says-ex "In-place mv! is not supported sparse matrices." {:a (info a#)})))
+     ;; (mm
+     ;;   ([_# alpha# a# b# _#]
+     ;;    (let-release [c# (sparse-matrix)]
+     ;;      (with-check sparse-error
+     ;;        (. ~mkl_rt ~(mkl-sparse 't 'spmm) (int operation#) (buffer a#) (buffer b#) c#)
+     ;;        c#)))
+     ;;   ([_# alpha# a# b# beta# c# _#];;TODO alpha...
+     ;;    (if (instance? GEMatrix b#)
+     ;;      (with-check sparse-error
+     ;;        (. ~mkl_rt ~(mkl-sparse 't 'mm) (int operation#) (~cast alpha#) (buffer a#) (descr a#)
+     ;;           (int layout#) (buffer b#) (int columns#) (stride b#) (~cast beta#) (buffer c#) (stride c#))
+     ;;        c#)
+     ;;      (with-check sparse-error
+     ;;        (. ~mkl_rt ~(mkl-sparse 't 'spmmd) (int operation#) (buffer a#) (buffer b#) (int layout#)
+     ;;           (int layout#) (buffer c#) (stride c#))
+     ;;        c#))))
+     ))
+
+(deftype DoubleCSREngine [])
+(real-csr-blas* DoubleCSREngine "d" double-ptr double)
+
+(deftype FloatCSREngine [])
+(real-csr-blas* FloatCSREngine "s" float-ptr float)
+
+;; ================================================================================
+
+
 (deftype MKLRealFactory [index-fact ^DataAccessor da
-                         vector-eng ge-eng cs-vector-eng]
+                         vector-eng ge-eng cs-vector-eng csr-eng]
   DataAccessorProvider
   (data-accessor [_]
     da)
@@ -918,7 +969,8 @@
   SparseFactory
   (cs-vector-engine [_]
     cs-vector-eng)
-  )
+  (csr-engine [_]
+    csr-eng))
 
 (deftype MKLIntegerFactory [index-fact ^DataAccessor da vector-eng ge-eng]
   DataAccessorProvider
@@ -966,9 +1018,9 @@
 (def mkl-byte (->MKLIntegerFactory mkl-int byte-accessor (->ByteVectorEngine) (->ByteGEEngine)))
 
 (def mkl-float
-  (->MKLRealFactory mkl-int float-accessor
-                    (->FloatVectorEngine) (->FloatGEEngine) (->FloatCSVectorEngine)))
+  (->MKLRealFactory mkl-int float-accessor (->FloatVectorEngine) (->FloatGEEngine)
+                    (->FloatCSVectorEngine) (->FloatCSREngine)))
 
 (def mkl-double
-  (->MKLRealFactory mkl-int double-accessor
-                    (->DoubleVectorEngine) (->DoubleGEEngine) (->DoubleCSVectorEngine)))
+  (->MKLRealFactory mkl-int double-accessor (->DoubleVectorEngine) (->DoubleGEEngine)
+                    (->DoubleCSVectorEngine)  (->DoubleCSREngine)))

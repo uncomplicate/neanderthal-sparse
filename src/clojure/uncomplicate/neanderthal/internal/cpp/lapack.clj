@@ -37,6 +37,7 @@
        ~x)
      (dragan-says-ex "You cannot sort a vector with stride different than 1." {:stride (stride ~x)})))
 
+;; TODO remove (unused)
 (defmacro matrix-lasrt [method a increasing]
   `(let [incr# ~(int (if increasing \I \D))
          buff# (.buffer ~a)
@@ -44,7 +45,6 @@
      (dostripe-layout ~a len# idx#
                       (with-lapack-check (~method incr# len# buff# (+ ofst# idx#))))
      ~a))
-
 
 (defmacro ge-lan [blas method ptr norm a]
   `(. ~blas ~method (.layout (navigator ~a)) ~norm (mrows ~a) (ncols ~a) (~ptr ~a) (stride ~a)))

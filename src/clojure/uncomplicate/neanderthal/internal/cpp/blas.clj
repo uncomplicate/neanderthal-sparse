@@ -8,9 +8,9 @@
 
 (ns uncomplicate.neanderthal.internal.cpp.blas
   (:require [uncomplicate.commons
-             [core :refer [with-release let-release Info info Releaseable release extract]]
+             [core :refer [with-release let-release Info info Releaseable release]]
              [utils :refer [dragan-says-ex]]]
-            [uncomplicate.clojure-cpp :refer [position! pointer float-pointer double-pointer]]
+            [uncomplicate.clojure-cpp :refer [position! pointer float-pointer double-pointer safe]]
             [uncomplicate.neanderthal
              [block :refer [buffer offset stride]]
              [core :refer [dim entry]]]
@@ -27,30 +27,30 @@
 
 (defn float-ptr
   (^FloatPointer [^Block x]
-   (.buffer x))
+   (safe (.buffer x)))
   (^FloatPointer [^Block x ^long i]
-   (.position (FloatPointer. ^FloatPointer (.buffer x)) i)))
+   (safe (.position (FloatPointer. ^FloatPointer (.buffer x)) i))))
 
 (defn double-ptr
   (^DoublePointer [^Block x]
-   (.buffer x))
+   (safe (.buffer x)))
   (^DoublePointer [^Block x ^long i]
-   (.position (DoublePointer. ^DoublePointer (.buffer x)) i)))
+   (safe (.position (DoublePointer. ^DoublePointer (.buffer x)) i))))
 
 (defn int-ptr ^IntPointer [^Block x]
-  (.buffer x))
+  (safe (.buffer x)))
 
 (defn coerce-float-ptr
   (^FloatPointer [^Block x]
-   (FloatPointer. ^Pointer (.buffer x)))
+   (safe (float-pointer (.buffer x))))
   (^FloatPointer [^Block x ^long i]
-   (.position (FloatPointer. ^Pointer (.buffer x)) i)))
+   (safe (position! (float-pointer (.buffer x)) i))))
 
 (defn coerce-double-ptr ^DoublePointer
   (^DoublePointer [^Block x]
-   (DoublePointer. ^Pointer (.buffer x)))
+   (safe (double-pointer (.buffer x))))
   (^DoublePointer [^Block x ^long i]
-   (.position (DoublePointer. ^Pointer (.buffer x)) i)))
+   (safe (position! (double-pointer (.buffer x)) i))))
 
 ;; TODO Copied from host
 (defn vector-imax [^RealVector x]
