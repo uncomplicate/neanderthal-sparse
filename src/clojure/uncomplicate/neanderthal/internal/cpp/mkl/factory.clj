@@ -8,7 +8,7 @@
 
 (ns uncomplicate.neanderthal.internal.cpp.mkl.factory
   (:require [uncomplicate.commons
-             [core :refer [with-release let-release info Releaseable release]]
+             [core :refer [with-release let-release info Releaseable release view]]
              [utils :refer [dragan-says-ex generate-seed]]]
             [uncomplicate.fluokitten.core :refer [fmap!]]
             [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer put!]]
@@ -25,8 +25,9 @@
              [lapack :refer :all]
              [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
                            vector-imax vector-imin ge-map ge-reduce full-matching-map]]]
-            [uncomplicate.neanderthal.internal.cpp.mkl.core
-             :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr export-csr]])
+            [uncomplicate.neanderthal.internal.cpp.mkl
+             [core :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr export-csr]]
+             [structures :refer [ge-csr-matrix]]])
   (:import java.nio.ByteBuffer
            [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
             GEMatrix DenseStorage]
@@ -967,6 +968,8 @@
   (ge-engine [_]
     ge-eng)
   SparseFactory
+  (create-ge-csr [this m n idx idx-b idx-e column? init]
+    (ge-csr-matrix this m n idx idx-b idx-e column? init))
   (cs-vector-engine [_]
     cs-vector-eng)
   (csr-engine [_]

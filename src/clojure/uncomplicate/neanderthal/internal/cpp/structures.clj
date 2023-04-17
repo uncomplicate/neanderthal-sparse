@@ -659,11 +659,19 @@
 
 ;; TODO Move to a more general namespace.
 
-(defprotocol SparseCompressed
+(defprotocol CompressedSparse
   (entries [this])
   (indices [this]))
 
+(defprotocol CSR
+  (columns [this])
+  (indexb [this])
+  (indexe [this]))
+
 (defprotocol SparseFactory ;;TODO move to api.
+  (create-ge-csr [this m n ind ind-b ind-e column? init])
+  (create-tr-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
+  (create-sy-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
   (cs-vector-engine [this])
   (csr-engine [this]))
 
@@ -758,14 +766,15 @@
   VectorSpace
   (dim [_]
     n)
-  SparseCompressed
+  ;; TODO perhaps implement Vector?
+  CompressedSparse
   (entries [_]
     nzx)
   (indices [_]
     indx))
 
 (extend-type RealBlockVector
-  SparseCompressed
+  CompressedSparse
   (entries [this]
     this)
   (indices [this]
@@ -793,9 +802,19 @@
   (transfer! (entries source) (entries destination))
   destination)
 
+(defn transfer-seq-csvector [source destination]
+  (let [[s0 s1] source]
+    (if (number? s0)
+      (transfer! source (entries destination))
+      (do
+        (transfer! s0 (indices destination))
+        (if (sequential? s1)
+          (transfer! s1 (entries destination))
+          (transfer! (rest source) (entries destination)))))))
+
 (defmethod transfer! [clojure.lang.Sequential CSVector]
   [source destination]
-  (transfer! source (entries destination))
+  (transfer-seq-csvector source destination)
   destination)
 
 (defmethod transfer! [(Class/forName "[D") CSVector]

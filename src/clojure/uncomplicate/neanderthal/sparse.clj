@@ -11,52 +11,93 @@
              [core :refer [with-release let-release Info info Releaseable release view]]
              [utils :refer [dragan-says-ex direct-buffer]]]
             [uncomplicate.neanderthal
-             [core :refer [vctr? vctr transfer! copy!]]]
+             [core :refer [dim transfer transfer! subvector matrix?]]]
             [uncomplicate.neanderthal.internal
              [api :as api]
              [navigation :refer :all]]
-            [uncomplicate.neanderthal.internal.cpp.structures :refer [cs-vector]]))
+            [uncomplicate.neanderthal.internal.cpp.structures
+             :refer [cs-vector CompressedSparse indices entries CSR columns indexb indexe
+                     create-ge-csr]])
+  (:import [uncomplicate.neanderthal.internal.cpp.structures CSVector]))
+
+(defn csv?
+  "TODO"
+  [x]
+  (instance? CSVector x))
 
 (defn csv
   "TODO"
   ([factory n idx nz & nzs]
-   (let [idx-factory (api/index-factory factory)]
-     (let-release [res (csv factory n idx)]
+   (let [factory (api/factory factory)
+         idx-factory (api/index-factory factory)]
+     (let-release [idx (if (api/compatible? idx-factory idx)
+                         (view idx)
+                         (transfer idx-factory idx))
+                   res (cs-vector factory n (view idx) (not nz))]
        (if-not nzs
-         (transfer! nz res)
-         (transfer! (cons nz nzs) res)))))
+         (transfer! nz (entries res))
+         (transfer! (cons nz nzs) (entries res)))
+       res)))
   ([factory ^long n source]
-   (let [idx-factory (api/index-factory factory)]
-     (if (vctr? source)
-       (let-release [idx (if (compatible? idx-factory source)
-                           (view source)
-                           (vctr idx-factory source))]
-         (cs-vector (api/factory factory) n idx true))
-       (let [[s0 s1] source]
-         (if (sequential? s0)
-           (if (sequential? s1)
-             (csv factory n s0 s1)
-             (csv factory n s0 (rest source)))
-           (if (and (integer? s0) (integer? s1))
-             (csv factory n (vctr idx-factory source))
-             (csv factory n (take-nth 2 source) (take-nth 2 (rest source))))))))))
+   (if (csv? source)
+     (csv factory n (indices source) (entries source))
+     (if (number? (first source))
+       (csv factory n source nil)
+       (csv factory n (first source) (second source)))))
+  ([factory cs]
+   (csv factory (dim cs) (indices cs) (entries cs))))
 
-#_(defn cs
+(defn csr?
   "TODO"
-  ([factory m n source options]
+  [x]
+  (satisfies? CSR x))
+
+(defn ^:private seq-to-csr [source]
+  (if (number? (get-in source [0 0]))
+    (seq-to-csr (partition 2 source))
+    (reduce (fn [[^long row ptrs idx vals] [ridx rvals]]
+              (if (= (count ridx) (count rvals))
+                [(inc row)
+                 (conj ptrs (+ (long (peek ptrs)) (long (count ridx))))
+                 (into idx ridx)
+                 (into vals rvals)]
+                (dragan-says-ex "Each value of a sparse matrix need its row/col position."
+                                {:row row :idx-count (count ridx) :val-count (count rvals)})))
+            [0 [0] [] []]
+            source)))
+
+(defn csr
+  "TODO"
+  ([factory m n idx idx-b idx-e nz options]
    (if (and (<= 0 (long m)) (<= 0 (long n)))
-     (let-release [res (api/create-cs (api/factory factory) m n (api/options-column? options)
-                                      (not (:raw options)))]
-       (if source (transfer! source res) res))
+     (let [idx-factory (api/index-factory factory)]
+       (let-release [idx (if (api/compatible? idx-factory idx)
+                           (view idx)
+                           (transfer idx-factory idx))
+                     idx-b (if (api/compatible? idx-factory idx-b)
+                             (view idx-b)
+                             (transfer idx-factory idx-b))
+                     idx-e (if (api/compatible? idx-factory idx-e)
+                             (view idx-e)
+                             (transfer idx-factory idx-e))
+                     res (create-ge-csr (api/factory factory) m n idx idx-b idx-e
+                                        (api/options-column? options) (not (:raw options)))]
+         (when nz (transfer! nz (entries res)))
+         res))
      (dragan-says-ex "Compressed sparse matrix cannot have a negative dimension." {:m m :n n})))
-  ([factory ^long m ^long n arg]
-   (if (or (not arg) (map? arg))
-     (cs factory m n nil arg)
-     (cs factory m n arg nil)))
-  ([factory ^long m ^long n]
-   (cs factory m n nil nil))
+  ([factory m n idx idx-be nz options]
+   (csr factory m n idx (pop idx-be) (rest idx-be) nz options))
+  ([factory m n idx idx-be options]
+   (csr factory m n idx (pop idx-be) (rest idx-be) nil options))
+  ([factory m n source options]
+   (if (csr? source)
+     (csr factory m n (columns source) (indexb source) (indexe source) (entries source) options)
+     (let [[_ ptrs idx vals] (seq-to-csr source)]
+       (csr factory m n idx (pop ptrs) (rest ptrs) vals options))))
+  ([factory m n source]
+   (csr factory m n source nil))
   ([factory a]
    (let-release [res (transfer (api/factory factory) a)]
-     (if (matrix? res)
+     (if (csr? res)
        res
-       (dragan-says-ex "This is not a valid source for matrices.")))))
+       (dragan-says-ex "This is not a valid source for CSR matrices.")))))

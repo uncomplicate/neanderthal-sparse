@@ -24,33 +24,33 @@
     [navigation :refer :all]]
    [uncomplicate.neanderthal.internal.host.fluokitten :refer :all]
    [uncomplicate.neanderthal.internal.cpp.structures
-    :refer [SparseCompressed entries indices vector-seq csr-engine]]
-   [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [create-csr]])
+    :refer [CompressedSparse entries indices vector-seq csr-engine CSR]]
+   [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [create-csr matrix-descr]])
   (:import [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
             IFn$LDD IFn$LLDD IFn$LLL IFn$LLLL]
            org.bytedeco.mkl.global.mkl_rt
            [uncomplicate.neanderthal.internal.api Block Matrix DataAccessor RealNativeMatrix
             IntegerVector LayoutNavigator MatrixImplementation RealAccessor IntegerAccessor]))
 
-(declare cs-matrix)
+(declare csr-matrix)
 
 ;; ======================= Compressed Sparse Matrix ======================================
 
-(deftype CSMatrix [^LayoutNavigator nav fact eng spm desc
-                   ^Block nzx ^IntegerVector indx ^IntegerVector pb ^IntegerVector pe
-                   ^long m ^long n]
+(deftype CSRMatrix [^LayoutNavigator nav fact eng spm desc
+                    ^Block nzx ^IntegerVector indx ^IntegerVector pb ^IntegerVector pe
+                    ^long m ^long n]
   Object
   (hashCode [_]
-    (-> (hash :CSMatrix) (hash-combine nzx) (hash-combine indx) (hash-combine pb) (hash-combine pe)))
+    (-> (hash :CSRMatrix) (hash-combine nzx) (hash-combine indx) (hash-combine pb) (hash-combine pe)))
   (equals [a b]
     (cond
       (nil? b) false
       (identical? a b) true
-      (instance? CSMatrix b)
-      (and (= nzx (entries b)) (= indx (indices b) (= pb (.pb ^CSMatrix b)) (= pe (.pe ^CSMatrix b))))
+      (instance? CSRMatrix b)
+      (and (= nzx (entries b)) (= indx (indices b) (= pb (.pb ^CSRMatrix b)) (= pe (.pe ^CSRMatrix b))))
       :default :false))
   (toString [_]
-    (format "#CSMatrix[%s, mxn:%dx%d, layout%s]"
+    (format "#CSRMatrix[%s, mxn:%dx%d, layout%s]"
             (entry-type (data-accessor nzx)) m n (dec-property (.layout nav))))
   MatrixImplementation
   (matrixType [_]
@@ -90,8 +90,8 @@
   (compatible? [_ b]
     (and (compatible? nzx (entries b))))
   (fits? [_ b]
-    (and (instance? CSMatrix b) (fits? nzx (entries b)) (fits? indx (indices b))
-         (fits? pe (.pe ^CSMatrix b)) (fits? pb (.pb ^CSMatrix b)))) ;; TODO region?
+    (and (instance? CSRMatrix b) (fits? nzx (entries b)) (fits? indx (indices b))
+         (fits? pe (.pe ^CSRMatrix b)) (fits? pb (.pb ^CSRMatrix b)))) ;; TODO region?
   (device [_]
     (device nzx))
   EngineProvider
@@ -111,11 +111,11 @@
   (raw [a]
     (raw a fact))
   (raw [_ fact]
-    (cs-matrix (factory fact) m n (view indx) (view pb) (view pe) (view desc) false))
+    (csr-matrix (factory fact) m n (view indx) (view pb) (view pe) (view desc) false))
   (zero [a]
     (zero a fact))
   (zero [_ fact]
-    (cs-matrix (factory fact) m n (view indx) (view pb) (view pe) (view desc) true)) ;;TODO indices on the gpu etc.
+    (csr-matrix (factory fact) m n (view indx) (view pb) (view pe) (view desc) true)) ;;TODO indices on the gpu etc.
   (host [a]
     (let-release [res (raw a)]
       (copy eng a res)
@@ -124,7 +124,7 @@
     a)
   Viewable
   (view [a]
-    (cs-matrix m n (view indx) (view pb) (view pe) (view nzx) nav (view desc)))
+    (csr-matrix m n (view indx) (view pb) (view pe) (view nzx) nav (view desc)))
   Block
   (buffer [_]
     (.buffer nzx))
@@ -143,12 +143,12 @@
     n)
   (row [a i]
     #_(cs-vector false buf n (+ ofst (.index nav stor i 0)) ;;TODO only the compressed stripe available (row/col)
-                       (if (.isRowMajor nav) 1 (.ld stor))))
+                 (if (.isRowMajor nav) 1 (.ld stor))))
   (rows [a]
     #_(sparse-rows a)) ;;TODO
   (col [a j]
     #_(cs-vector fact false buf m (+ ofst (.index nav stor 0 j)) ;;TODO
-                       (if (.isColumnMajor nav) 1 (.ld stor))))
+                 (if (.isColumnMajor nav) 1 (.ld stor))))
   (cols [a]
     #_(sparse-cols a)) ;;TODO
   (dia [a]
@@ -158,27 +158,40 @@
   (dias [a]
     #_(sparse-dias a)) ;;TODO
   (submatrix [a i j k l]
-    #_(cs-matrix fact false buf k l (+ ofst (.index nav stor i j)) ;; TODO see if it's possible in general case
-                    nav (full-storage (.isColumnMajor nav) k l (.ld stor)) (ge-region k l)))
+    #_(csr-matrix fact false buf k l (+ ofst (.index nav stor i j)) ;; TODO see if it's possible in general case
+                  nav (full-storage (.isColumnMajor nav) k l (.ld stor)) (ge-region k l)))
   (transpose [a]
-    #_(cs-matrix fact false buf n m ofst (flip nav) stor (flip reg))) ;; TODO
-  SparseCompressed
+    #_(csr-matrix fact false buf n m ofst (flip nav) stor (flip reg))) ;; TODO
+  CompressedSparse
   (entries [_]
     nzx)
   (indices [_]
-    indx))
+    indx)
+  CSR
+  (columns [_]
+    indx)
+  (indexb [_]
+    pb)
+  (indexe [_]
+    pe))
 
-(defn cs-matrix
+(defn csr-matrix
   ([m n indx pb pe nzx nav desc]
    (let [fact (factory nzx)]
      (if (= (factory indx) (index-factory nzx))
        (if (and (<= 0 (dim nzx) (* (long m) (long n))) (= 1 (stride indx) (stride nzx))
                 (= 0 (offset indx) (offset nzx)) (fits? nzx indx))
-         (->CSMatrix fact (csr-engine fact)
-                     (create-csr (buffer nzx) 0 m n (buffer pb) (buffer pe) (buffer indx))
-                     desc nzx indx pb pe m n)
+         (->CSRMatrix nav fact (csr-engine fact)
+                      (create-csr (buffer nzx) 0 m n (buffer pb) (buffer pe) (buffer indx))
+                      desc nzx indx pb pe m n)
          (dragan-says-ex "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx}));;TODO error message
        (dragan-says-ex "Incompatible index vector." {:required (index-factory nzx) :provided (factory indx)}))))
   ([fact m n indx pb pe nav desc init]
    (let-release [nzx (create-vector fact (dim indx) init)]
-     (cs-matrix m n indx pb pe nzx nav desc))))
+     (csr-matrix m n indx pb pe nzx nav desc))))
+
+(defn ge-csr-matrix
+  ([fact m n indx pb pe column? init]
+   (csr-matrix fact m n indx pb pe (layout-navigator column?) (matrix-descr :ge) init))
+  ([fact m n indx pb pe column?]
+   (csr-matrix fact m n indx pb pe column? true)))
