@@ -17,11 +17,12 @@
                                      double-pointer long-pointer int-pointer short-pointer byte-pointer
                                      element-count]]
    [uncomplicate.neanderthal
-    [core :refer [dim]]
+    [core :refer [dim transfer!]]
     [block :refer [entry-type offset stride buffer column?]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
-    [navigation :refer :all]]
+    [navigation :refer :all]
+    [printing :refer [print-vector]]]
    [uncomplicate.neanderthal.internal.host.fluokitten :refer :all]
    [uncomplicate.neanderthal.internal.cpp.structures
     :refer [CompressedSparse entries indices vector-seq csr-engine CSR]]
@@ -195,3 +196,65 @@
    (csr-matrix fact m n indx pb pe (layout-navigator column?) (matrix-descr :ge) init))
   ([fact m n indx pb pe column?]
    (csr-matrix fact m n indx pb pe column? true)))
+
+(defmethod print-method CSRMatrix [^CSRMatrix x ^java.io.Writer w] ;; TODO transform to nested vectors
+  (.write w (format "%s\n%s" (str x) (pr-str (seq (indices x)))))
+  (print-vector w (entries x)))
+
+(defmethod transfer! [CSRMatrix CSRMatrix]
+  [source destination]
+  (transfer! (entries source) (entries destination))
+  destination)
+
+(defn seq-to-csr [source]
+  (if (number? (get-in source [0 0]))
+    (seq-to-csr (partition 2 source))
+    (reduce (fn [[^long row ptrs idx vals] [ridx rvals]]
+              (if (= (count ridx) (count rvals))
+                [(inc row)
+                 (conj ptrs (+ (long (peek ptrs)) (long (count ridx))))
+                 (into idx ridx)
+                 (into vals rvals)]
+                (dragan-says-ex "Each value of a sparse matrix need its row/col position."
+                                {:row row :idx-count (count ridx) :val-count (count rvals)})))
+            [0 [0] [] []]
+            source)))
+
+(defmethod transfer! [clojure.lang.Sequential CSRMatrix]
+  [source destination]
+  (transfer! (seq-to-csr 3) (entries destination))
+  destination)
+
+(defmethod transfer! [(Class/forName "[D") CSRMatrix]
+  [source destination]
+  (transfer! source (entries destination))
+  destination)
+
+(defmethod transfer! [(Class/forName "[F") CSRMatrix]
+  [source destination]
+  (transfer! source (entries destination))
+  destination)
+
+(defmethod transfer! [(Class/forName "[J") CSRMatrix]
+  [source destination]
+  (transfer! source (entries destination))
+  destination)
+
+(defmethod transfer! [(Class/forName "[I") CSRMatrix]
+  [source destination]
+  (transfer! source (entries destination))
+  destination)
+
+(defmethod transfer! [CSRMatrix (Class/forName "[D")]
+  [source destination]
+  (transfer! (entries source) destination))
+
+(defmethod transfer! [CSRMatrix (Class/forName "[F")]
+  [source destination]
+  (transfer! (entries source) destination))
+
+;;TODO handle heterogenous types (float/double...)
+#_(defmethod transfer! [RealBlockVector CSMatrix]
+  [^RealBlockVector source ^CSMatrix destination]
+  (gthr (engine destination) source destination)
+  destination)

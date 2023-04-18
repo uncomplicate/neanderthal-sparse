@@ -467,7 +467,7 @@
 
 (defmethod print-method IntegerBlockVector
   [^Vector x ^java.io.Writer w]
-  (.write w (format "%s%s" (str x) (pr-str (take *print-length* (seq x))))))
+  (.write w (format "%s%s" (str x) (pr-str (seq x)))))
 
 (defmethod transfer! [IntegerBlockVector IntegerBlockVector]
   [^IntegerBlockVector source ^IntegerBlockVector destination]
@@ -794,7 +794,7 @@
      (cs-vector n indx nzx))))
 
 (defmethod print-method CSVector [^Vector x ^java.io.Writer w]
-  (.write w (format "%s%s" (str x) (pr-str (take *print-length* (indices x)))))
+  (.write w (format "%s%s" (str x) (pr-str (indices x))))
   (print-vector w (entries x)))
 
 (defmethod transfer! [CSVector CSVector]

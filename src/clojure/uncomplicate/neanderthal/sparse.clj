@@ -17,7 +17,9 @@
              [navigation :refer :all]]
             [uncomplicate.neanderthal.internal.cpp.structures
              :refer [cs-vector CompressedSparse indices entries CSR columns indexb indexe
-                     create-ge-csr]])
+                     create-ge-csr]]
+            [uncomplicate.neanderthal.internal.cpp.mkl.structures
+             :refer [seq-to-csr]])
   (:import [uncomplicate.neanderthal.internal.cpp.structures CSVector]))
 
 (defn csv?
@@ -51,20 +53,6 @@
   "TODO"
   [x]
   (satisfies? CSR x))
-
-(defn ^:private seq-to-csr [source]
-  (if (number? (get-in source [0 0]))
-    (seq-to-csr (partition 2 source))
-    (reduce (fn [[^long row ptrs idx vals] [ridx rvals]]
-              (if (= (count ridx) (count rvals))
-                [(inc row)
-                 (conj ptrs (+ (long (peek ptrs)) (long (count ridx))))
-                 (into idx ridx)
-                 (into vals rvals)]
-                (dragan-says-ex "Each value of a sparse matrix need its row/col position."
-                                {:row row :idx-count (count ridx) :val-count (count rvals)})))
-            [0 [0] [] []]
-            source)))
 
 (defn csr
   "TODO"
@@ -101,3 +89,5 @@
      (if (csr? res)
        res
        (dragan-says-ex "This is not a valid source for CSR matrices.")))))
+
+;; TODO Implement print-method and transfer! functions for matrices, so you can test them more easily. Then, write tests, and subvectors etc. Along the way, implement missing features and Sparse operations.
