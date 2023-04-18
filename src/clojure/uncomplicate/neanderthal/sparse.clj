@@ -31,7 +31,9 @@
   "TODO"
   ([factory n idx nz & nzs]
    (let [factory (api/factory factory)
-         idx-factory (api/index-factory factory)]
+         idx-factory (api/index-factory factory)
+         idx (or idx [])
+         nz (or nz [])]
      (let-release [idx (if (api/compatible? idx-factory idx)
                          (view idx)
                          (transfer idx-factory idx))
@@ -47,7 +49,9 @@
        (csv factory n source nil)
        (csv factory n (first source) (second source)))))
   ([factory cs]
-   (csv factory (dim cs) (indices cs) (entries cs))))
+   (if (number? cs)
+     (csv factory cs [])
+     (csv factory (dim cs) (indices cs) (entries cs)))))
 
 (defn csr?
   "TODO"
@@ -84,6 +88,8 @@
        (csr factory m n idx (pop ptrs) (rest ptrs) vals options))))
   ([factory m n source]
    (csr factory m n source nil))
+  ([factory m n]
+   (csr factory m n nil nil))
   ([factory a]
    (let-release [res (transfer (api/factory factory) a)]
      (if (csr? res)

@@ -794,7 +794,7 @@
      (cs-vector n indx nzx))))
 
 (defmethod print-method CSVector [^Vector x ^java.io.Writer w]
-  (.write w (format "%s%s" (str x) (pr-str (indices x))))
+  (.write w (format "%s\n%s" (str x) (pr-str (seq (indices x)))))
   (print-vector w (entries x)))
 
 (defmethod transfer! [CSVector CSVector]

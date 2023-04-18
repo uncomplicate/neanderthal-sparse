@@ -179,11 +179,12 @@
 (defn csr-matrix
   ([m n indx pb pe nzx nav desc]
    (let [fact (factory nzx)]
-     (if (= (factory indx) (index-factory nzx))
+     (if (compatible? (index-factory nzx) indx)
        (if (and (<= 0 (dim nzx) (* (long m) (long n))) (= 1 (stride indx) (stride nzx))
-                (= 0 (offset indx) (offset nzx)) (fits? nzx indx))
+                (= 0 (offset indx) (offset nzx)) (fits? indx nzx))
          (->CSRMatrix nav fact (csr-engine fact)
-                      (create-csr (buffer nzx) 0 m n (buffer pb) (buffer pe) (buffer indx))
+                      (create-csr (buffer nzx) 0 (max 1 m) (max 1 n)
+                                  (buffer pb) (buffer pe) (buffer indx))
                       desc nzx indx pb pe m n)
          (dragan-says-ex "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx}));;TODO error message
        (dragan-says-ex "Incompatible index vector." {:required (index-factory nzx) :provided (factory indx)}))))
