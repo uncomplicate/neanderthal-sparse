@@ -15,9 +15,9 @@
     :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold]]
    [uncomplicate.clojure-cpp :refer [pointer pointer-seq fill! capacity! byte-buffer float-pointer
                                      double-pointer long-pointer int-pointer short-pointer byte-pointer
-                                     element-count]]
+                                     element-count null?]]
    [uncomplicate.neanderthal
-    [core :refer [dim transfer!]]
+    [core :refer [dim transfer! mrows ncols]]
     [block :refer [entry-type offset stride buffer column?]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
@@ -48,8 +48,9 @@
       (nil? b) false
       (identical? a b) true
       (instance? CSRMatrix b)
-      (and (= nzx (entries b)) (= indx (indices b) (= pb (.pb ^CSRMatrix b)) (= pe (.pe ^CSRMatrix b))))
-      :default :false))
+      (and (= m (mrows b)) (= n (ncols b))
+           (= nzx (entries b)) (= indx (indices b)) (= pb (.pb ^CSRMatrix b)) (= pe (.pe ^CSRMatrix b)))
+      :default false))
   (toString [_]
     (format "#CSRMatrix[%s, mxn:%dx%d, layout%s]"
             (entry-type (data-accessor nzx)) m n (dec-property (.layout nav))))
@@ -86,7 +87,7 @@
     true)
   Seqable
   (seq [x]
-    (vector-seq nzx 0))
+    (vector-seq nzx))
   MemoryContext
   (compatible? [_ b]
     (and (compatible? nzx (entries b))))
@@ -177,13 +178,13 @@
     pe))
 
 (defn csr-matrix
-  ([m n indx pb pe nzx nav desc]
+  ([m n indx pb pe nzx ^LayoutNavigator nav desc]
    (let [fact (factory nzx)]
      (if (compatible? (index-factory nzx) indx)
-       (if (and (<= 0 (dim nzx) (* (long m) (long n))) (= 1 (stride indx) (stride nzx))
-                (= 0 (offset indx) (offset nzx)) (fits? indx nzx))
+       (if (and (<= 0 (dim indx) (dim nzx)) (<= (long (if (.isColumnMajor nav) n m)) (dim pe) (dim pb))
+                (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx)) (fits? indx nzx)) ;;TODO better error message. Perhaps automatize (.isColumnmajor part)
          (->CSRMatrix nav fact (csr-engine fact)
-                      (create-csr (buffer nzx) 0 (max 1 m) (max 1 n)
+                      (create-csr (buffer nzx) 0 (max 1 (long m)) (max 1 (long n))
                                   (buffer pb) (buffer pe) (buffer indx))
                       desc nzx indx pb pe m n)
          (dragan-says-ex "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx}));;TODO error message
@@ -200,7 +201,8 @@
 
 (defmethod print-method CSRMatrix [^CSRMatrix x ^java.io.Writer w] ;; TODO transform to nested vectors
   (.write w (format "%s\n%s" (str x) (pr-str (seq (indices x)))))
-  (print-vector w (entries x)))
+  (when-not (null? (buffer (entries x)))
+    (print-vector w (entries x))))
 
 (defmethod transfer! [CSRMatrix CSRMatrix]
   [source destination]
@@ -211,13 +213,14 @@
   (if (number? (get-in source [0 0]))
     (seq-to-csr (partition 2 source))
     (reduce (fn [[^long row ptrs idx vals] [ridx rvals]]
-              (if (= (count ridx) (count rvals))
-                [(inc row)
-                 (conj ptrs (+ (long (peek ptrs)) (long (count ridx))))
-                 (into idx ridx)
-                 (into vals rvals)]
-                (dragan-says-ex "Each value of a sparse matrix need its row/col position."
-                                {:row row :idx-count (count ridx) :val-count (count rvals)})))
+              (let [fill (- (count ridx) (count rvals))]
+                (if (<= 0 fill)
+                  [(inc row)
+                   (conj ptrs (+ (long (peek ptrs)) (long (count ridx))))
+                   (into idx ridx)
+                   (-> vals (into rvals) (into (repeat fill 0.0)))]
+                  (dragan-says-ex "Each value of a sparse matrix need its row/col position."
+                                  {:row row :idx-count (count ridx) :val-count (count rvals)}))))
             [0 [0] [] []]
             source)))
 

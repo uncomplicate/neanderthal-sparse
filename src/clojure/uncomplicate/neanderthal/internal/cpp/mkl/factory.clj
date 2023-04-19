@@ -969,7 +969,7 @@
     ge-eng)
   SparseFactory
   (create-ge-csr [this m n idx idx-b idx-e column? init]
-    (ge-csr-matrix this m n idx idx-b idx-e column? init))
+    (ge-csr-matrix this m n idx idx-b (view idx-e) column? init))
   (cs-vector-engine [_]
     cs-vector-eng)
   (csr-engine [_]

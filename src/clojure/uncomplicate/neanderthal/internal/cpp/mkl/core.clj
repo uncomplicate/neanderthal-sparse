@@ -10,7 +10,7 @@
   (:require [uncomplicate.commons
              [core :refer [with-release let-release Info info Releaseable release Viewable]]
              [utils :refer [dragan-says-ex with-check]]]
-            [uncomplicate.clojure-cpp :refer [float-ptr double-ptr int-ptr]]
+            [uncomplicate.clojure-cpp :refer [float-ptr double-ptr int-ptr null?]]
             [uncomplicate.neanderthal.internal.api :refer [Flippable]]
             [uncomplicate.neanderthal.internal.cpp.mkl.constants :refer :all])
   (:import [org.bytedeco.javacpp Pointer FloatPointer DoublePointer IntPointer]
@@ -167,11 +167,12 @@
 (extend-type mkl_rt$sparse_matrix
   Releaseable
   (release [this]
-    (with-check sparse-error
-      (mkl_rt/mkl_sparse_destroy this)
-      (do (.deallocate this)
-          (.setNull this)
-          true))))
+    (when-not (null? this)
+      (with-check sparse-error
+        (mkl_rt/mkl_sparse_destroy this)
+        (do (.deallocate this)
+            (.setNull this)
+            true)))))
 
 (defn sparse-matrix
   (^mkl_rt$sparse_matrix []

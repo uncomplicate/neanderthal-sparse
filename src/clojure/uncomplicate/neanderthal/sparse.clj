@@ -37,7 +37,7 @@
      (let-release [idx (if (api/compatible? idx-factory idx)
                          (view idx)
                          (transfer idx-factory idx))
-                   res (cs-vector factory n (view idx) (not nz))]
+                   res (cs-vector factory n (view idx) (not (seq nz)))]
        (if-not nzs
          (transfer! nz (entries res))
          (transfer! (cons nz nzs) (entries res)))
@@ -50,7 +50,7 @@
        (csv factory n (first source) (second source)))))
   ([factory cs]
    (if (number? cs)
-     (csv factory cs [])
+     (csv factory cs nil)
      (csv factory (dim cs) (indices cs) (entries cs)))))
 
 (defn csr?
@@ -73,7 +73,7 @@
                              (view idx-e)
                              (transfer idx-factory idx-e))
                      res (create-ge-csr (api/factory factory) m n idx idx-b idx-e
-                                        (api/options-column? options) (not (:raw options)))]
+                                        (= :column (:layout options)) true)]
          (when nz (transfer! nz (entries res)))
          res))
      (dragan-says-ex "Compressed sparse matrix cannot have a negative dimension." {:m m :n n})))
@@ -84,10 +84,15 @@
   ([factory m n source options]
    (if (csr? source)
      (csr factory m n (columns source) (indexb source) (indexe source) (entries source) options)
-     (let [[_ ptrs idx vals] (seq-to-csr source)]
-       (csr factory m n idx (pop ptrs) (rest ptrs) vals options))))
-  ([factory m n source]
-   (csr factory m n source nil))
+     (if (nil? source)
+       (let-release [idx-be (repeat (if (= :column (:layout options)) n m) 0)]
+         (csr factory m n [] idx-be idx-be [] options))
+       (let [[_ ptrs idx vals] (seq-to-csr source)]
+         (csr factory m n idx (pop ptrs) (rest ptrs) vals options)))))
+  ([factory m n arg]
+   (if (map? arg)
+     (csr factory m n nil arg)
+     (csr factory m n arg nil)))
   ([factory m n]
    (csr factory m n nil nil))
   ([factory a]

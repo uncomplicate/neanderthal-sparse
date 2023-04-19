@@ -17,7 +17,7 @@
     :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold]]
    [uncomplicate.clojure-cpp :refer [pointer pointer-seq fill! capacity! byte-buffer float-pointer
                                      double-pointer long-pointer int-pointer short-pointer byte-pointer
-                                     element-count]]
+                                     element-count null?]]
    [uncomplicate.neanderthal
     [core :refer [transfer! copy! dim subvector vctr ge matrix-type mrows ncols]]
     [math :refer [ceil]]
@@ -100,11 +100,16 @@
 ;; =======================================================================
 
 ;; ================ from buffer-block ====================================
-(defn vector-seq [^Vector vector ^long i]
-  (lazy-seq
-   (if (< -1 i (.dim vector))
-     (cons (.boxedEntry vector i) (vector-seq vector (inc i)))
-     '())))
+(defn vector-seq
+  ([^Vector vector ^long i]
+   (lazy-seq
+    (if (< -1 i (.dim vector))
+      (cons (.boxedEntry vector i) (vector-seq vector (inc i)))
+      '())))
+  ([^Vector vector]
+   (if (not (null? (buffer vector)))
+     (vector-seq vector 0)
+     nil)))
 
 (defmacro ^:private transfer-vector-vector [source destination]
   `(do
@@ -398,7 +403,7 @@
     (format "#IntegerBlockVector[%s, n:%d, stride:%d]" (entry-type da) n strd))
   Seqable
   (seq [x]
-    (vector-seq x 0))
+    (vector-seq x))
   IFn$LLL
   (invokePrim [x i v]
     (if (< -1 i n)
@@ -467,7 +472,9 @@
 
 (defmethod print-method IntegerBlockVector
   [^Vector x ^java.io.Writer w]
-  (.write w (format "%s%s" (str x) (pr-str (seq x)))))
+  (.write w (str x))
+  (when-not (null? (buffer x))
+    (pr-str (seq x))))
 
 (defmethod transfer! [IntegerBlockVector IntegerBlockVector]
   [^IntegerBlockVector source ^IntegerBlockVector destination]
@@ -539,7 +546,7 @@
     (format "#RealBlockVector[%s, n:%d, stride:%d]" (entry-type da) n strd))
   Seqable
   (seq [x]
-    (vector-seq x 0))
+    (vector-seq x))
   IFn$LDD
   (invokePrim [x i v]
     (if (< -1 i n)
@@ -609,7 +616,8 @@
 
 (defmethod print-method RealBlockVector [^Vector x ^java.io.Writer w]
   (.write w (str x))
-  (print-vector w x))
+  (when-not (null? (buffer x))
+    (print-vector w x)))
 
 (defmethod transfer! [RealBlockVector RealBlockVector]
   [^RealBlockVector source ^RealBlockVector destination]
@@ -684,8 +692,8 @@
       (nil? y) false
       (identical? x y) true
       (instance? CSVector y)
-      (and  (= nzx (entries y)) (= indx (indices y)))
-      :default :false))
+      (and (= n (dim y)) (= nzx (entries y)) (= indx (indices y)))
+      :default false))
   (toString [_]
     (format "#CSVector[%s, n:%d, nnz:%d]" (entry-type (data-accessor nzx)) n (dim nzx)))
   Info
@@ -710,7 +718,7 @@
     true)
   Seqable
   (seq [x]
-    (vector-seq nzx 0))
+    (vector-seq nzx))
   MemoryContext
   (compatible? [_ y]
     (compatible? nzx (entries y)))
@@ -794,8 +802,11 @@
      (cs-vector n indx nzx))))
 
 (defmethod print-method CSVector [^Vector x ^java.io.Writer w]
-  (.write w (format "%s\n%s" (str x) (pr-str (seq (indices x)))))
-  (print-vector w (entries x)))
+  (.write w (format "%s\n%s" (str x) ))
+  (when-not (null? (buffer (indices x)))
+    (pr-str (seq (indices x))))
+  (when-not (null? (buffer (entries x)))
+    (print-vector w (entries x))))
 
 (defmethod transfer! [CSVector CSVector]
   [source destination]
@@ -1133,6 +1144,8 @@
    (ge-matrix constructor fact m n true)))
 
 (def real-ge-matrix (partial ge-matrix ->RealGEMatrix))
+
+;; TODO print-method
 
 (defmethod transfer! [clojure.lang.Sequential RealGEMatrix]
   [source ^RealGEMatrix destination]
