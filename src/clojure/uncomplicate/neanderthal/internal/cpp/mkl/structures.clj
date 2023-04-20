@@ -31,7 +31,8 @@
             IFn$LDD IFn$LLDD IFn$LLL IFn$LLLL]
            org.bytedeco.mkl.global.mkl_rt
            [uncomplicate.neanderthal.internal.api Block Matrix DataAccessor RealNativeMatrix
-            IntegerVector LayoutNavigator MatrixImplementation RealAccessor IntegerAccessor]))
+            IntegerVector LayoutNavigator MatrixImplementation RealAccessor IntegerAccessor]
+           uncomplicate.neanderthal.internal.cpp.structures.CSVector))
 
 (declare csr-matrix)
 
@@ -256,6 +257,16 @@
 (defmethod transfer! [CSRMatrix (Class/forName "[F")]
   [source destination]
   (transfer! (entries source) destination))
+
+(defmethod transfer! [CSVector CSRMatrix]
+  [source destination]
+  (transfer! (entries source) (entries destination))
+  destination)
+
+(defmethod transfer! [CSRMatrix CSVector]
+  [source destination]
+  (transfer! (entries source) (entries destination))
+  destination)
 
 ;;TODO handle heterogenous types (float/double...)
 #_(defmethod transfer! [RealBlockVector CSMatrix]

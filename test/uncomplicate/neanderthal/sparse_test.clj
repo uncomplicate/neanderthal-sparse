@@ -9,6 +9,7 @@
 (ns uncomplicate.neanderthal.sparse-test
   (:require [midje.sweet :refer [facts throws =>]]
             [uncomplicate.commons.core :refer [with-release release]]
+            [uncomplicate.fluokitten.core :refer [fmap fmap! fold foldmap]]
             [uncomplicate.neanderthal.core :refer :all]
             [uncomplicate.neanderthal.sparse :refer [csv csr]]
             [uncomplicate.neanderthal.internal.cpp.structures :refer [entries indices];;TODO
@@ -77,7 +78,7 @@
   (let [x (csv factory 3 [1] [1.0])
         a (csr factory 2 3 [[1] [1.0]
                             [1] [2.0]])
-        ;;col-a (col a 0)
+        ;;col-a (col a 0) ;; TODO
         ]
     (facts "CSVector and CSRMatrix release tests."
            ;; (release col-a) => true
@@ -105,10 +106,127 @@
      (transfer! (long-array [1 2 3]) x0) => x1
      (seq (transfer! x1 (float-array 2))) => [1.0 2.0]
      (seq (transfer! x1 (double-array 2))) => [1.0 2.0]
+     (transfer! x1 (int-array 2)) => (throws ExceptionInfo)
+     (transfer! x1 (long-array 2)) => (throws ExceptionInfo)
+     (transfer! x1 (short-array 2)) => (throws ExceptionInfo)
+     (transfer! x1 (byte-array 2)) => (throws ExceptionInfo)
      (transfer! y1 x0) => x2
      (transfer! x2 y0) => y2)))
 
-(test-create mkl-float)
-(test-equality mkl-float)
-(test-release mkl-float)
-(test-csv-transfer mkl-float mkl-float)
+(defn test-csr-transfer [factory0 factory1]
+  (with-release [x0 (csv factory0 4 [1 3])
+                 x1 (csv factory0 4 [1 3] [1.0 2.0])
+                 y0 (csv factory1 55 [22 33])
+                 y1 (csv factory1 55 [22 33] [10 20])
+                 a0 (csr factory0 2 4 [[1 3] []
+                                       [0 2] []])
+                 a1 (csr factory0 2 4 [[1 3] [1.0 2.0]
+                                       [0 2] []])
+                 a2 (csr factory0 2 4 [[1 3] [10 20]
+                                       [0 2] [100 200]])
+                 b0 (csr factory1 2 4 [[1 3] []
+                                       [0 2] []])
+                 b1 (csr factory1 2 4 [[1 3] [10 20]
+                                       [0 2] [100 200]])
+                 b2 (csr factory1 2 4 [[1 3] [10 20]
+                                       [0 2] [100 200]])]
+    (facts
+     "CSR transfer tests."
+     (transfer! (float-array [1 2]) a0) => a1
+     (transfer! (double-array [1 2]) a0) => a1
+     (transfer! (int-array [1 2 0 0 44]) a0) => a1
+     (transfer! (long-array [1 2]) a0) => a1
+     (seq (transfer! a1 (float-array 2))) => [1.0 2.0]
+     (seq (transfer! a1 (double-array 2))) => [1.0 2.0]
+     (transfer! a1 (int-array 2)) => (throws ExceptionInfo)
+     (transfer! a1 (long-array 2)) => (throws ExceptionInfo)
+     (transfer! a1 (short-array 2)) => (throws ExceptionInfo)
+     (transfer! a1 (byte-array 2)) => (throws ExceptionInfo)
+     (transfer! b1 a0) => a2
+     (transfer! a2 b0) => b2
+     (transfer! (transfer! x1 a0) x0) => x1
+     (transfer! (transfer! y1 a1) y0) => y1)))
+
+(defn test-csv-functor [factory]
+  (with-release [fx (fn [] (csv factory 10 [1 3 5 7] [1 2 3 4]))
+                 fy (fn [] (csv factory 10 [1 3 5 7] [2 3 4 5]))
+                 fz (fn [] (csv factory 10 [1 3 5 7 9] [2 3 4 5 6]))
+                 x (fx)
+                 f (fn
+                     (^double [^double x] (+ x 1.0))
+                     (^double [^double x ^double y] (+ x y))
+                     (^double [^double x ^double y ^double z] (+ x y z))
+                     (^double [^double x ^double y ^double z ^double w] (+ x y z w)))]
+
+    (facts "Functor implementation for compressed sparse vector"
+
+           (fmap! f (fx)) => (csv factory 10 [1 3 5 7] [2 3 4 5])
+           (fmap! f x) => x
+
+           (fmap! f (fx) (fy)) => (csv factory 10 [1 3 5 7] [3 5 7 9])
+           (fmap! f x (fy)) => x
+
+           (fmap! f (fx) (fy) (fy)) => (csv factory 10 [1 3 5 7] [5 8 11 14])
+           (fmap! f x (fy) (fy)) => x
+
+           (fmap! f (fx) (fy) (fy) (fy)) => (csv factory 10 [1 3 5 7] [7 11 15 19])
+           (fmap! f x (fy) (fy) (fy)) => x
+
+           (fmap! + (fx) (fy) (fy) (fy) [(fy)]) => (throws Exception)
+           (fmap! + (fx) (fz)) => (throws ExceptionInfo))))
+
+(defn test-csv-fold [factory]
+  (with-release [x (csv factory 10 [1 3 5 7] [1 2 3 4])
+                 *' (fn ^double [^double x ^double y]
+                      (* x y))
+                 +' (fn ^double [^double x ^double y]
+                      (+ x y))]
+    (facts "Fold implementation for compressed sparse vector."
+
+           (fold x) => 10.0
+           (fold *' 1.0 x) => 24.0
+           (fold +' 0.0 x) => (fold x))))
+
+(defn test-csv-reducible [factory]
+  (with-release [y (csv factory 10 [1 3 5 7 9] [2 3 4 5 6])
+                 x (csv factory 10 [1 3 5 7 9] [1 2 3 4 0])
+                 pf1 (fn ^double [^double res ^double x] (+ x res))
+                 pf1o (fn [res ^double x] (conj res x))]
+    (facts "Reducible implementation for vector"
+
+           (fold pf1 1.0 x) => 11.0
+           (fold pf1o [] x) => [1.0 2.0 3.0 4.0 0.0]
+
+           (fold pf1 1.0 x y) => 31.0
+           (fold pf1o [] x y) => [3.0 5.0 7.0 9.0 6.0]
+
+           (fold pf1 1.0 x y y) => 51.0
+           (fold pf1o [] x y y) => [5.0 8.0 11.0 14.0 12.0]
+
+           (fold pf1 1.0 x y y y) => 71.0
+           (fold pf1o [] x y y y) => [7.0 11.0 15.0 19.0 18.0]
+
+           (fold + 1.0 x y y y) => 71.0)))
+
+(defn test-csv-seq [factory]
+  (facts "Compressed sparse vector as a sequence."
+         (seq (csv factory 10 [1 3 5] [1 2 3])) => '(1.0 2.0 3.0)
+         ;; (seq (row (ge factory 2 3 (range 6)) 1)) => '(1.0 3.0 5.0) TODO
+         ))
+
+
+(defn test-all [factory0 factory1]
+  (test-create factory0)
+  (test-equality factory0)
+  (test-release factory0)
+  (test-csv-transfer factory0 factory0)
+  (test-csv-transfer factory0 factory1)
+  (test-csr-transfer factory0 factory0)
+  (test-csr-transfer factory0 factory1)
+  (test-csv-functor factory0)
+  (test-csv-fold factory0)
+  (test-csv-reducible factory0)
+  (test-csv-seq factory0))
+
+(test-all mkl-float mkl-double)
+(test-all mkl-double mkl-float)

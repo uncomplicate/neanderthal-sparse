@@ -14,7 +14,7 @@
                   Viewable view]]
     [utils :refer [dragan-says-ex]]]
    [uncomplicate.fluokitten.protocols
-    :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold]]
+    :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold foldmap fmap fmap!]]
    [uncomplicate.clojure-cpp :refer [pointer pointer-seq fill! capacity! byte-buffer float-pointer
                                      double-pointer long-pointer int-pointer short-pointer byte-pointer
                                      element-count null?]]
@@ -779,7 +779,24 @@
   (entries [_]
     nzx)
   (indices [_]
-    indx))
+    indx)
+  Monoid
+  (id [_]
+    (cs-vector fact 0))
+  Applicative
+  (pure [_ v]
+   (let-release [res (cs-vector fact 1 (vctr (index-factory fact) 1) false)]
+     (uncomplicate.neanderthal.core/entry! (indices res) 0 0)
+     (uncomplicate.neanderthal.core/entry! (entries res) 0 v)
+     res))
+  (pure [_ v vs]
+   (let [cnt (inc (count vs))]
+     (let-release [res (cs-vector fact cnt (vctr (index-factory fact) cnt) false)]
+       (transfer! (range) (indices res))
+       (transfer! (cons v vs) (entries res))
+       res)))
+  ;; TODO Magma
+  )
 
 (extend-type RealBlockVector
   CompressedSparse
@@ -799,10 +816,94 @@
        (throw (ex-info "Incompatible index vector" {:required (index-factory nzx) :provided (factory indx)})))))
   ([fact ^long n indx init]
    (let-release [nzx (create-vector fact (dim indx) init)]
+     (cs-vector n indx nzx)))
+  ([fact ^long n]
+   (let-release [indx (create-vector (index-factory fact) 0 false)
+                 nzx (create-vector fact 0 false)]
      (cs-vector n indx nzx))))
 
+(defn check-indices
+  ([x y]
+   (when-not (= (indices x) (indices y))
+     (throw (dragan-says-ex "Compressed sparse operation with incompatible indices is not allowed." {:x x :y y}))))
+  ([x y z]
+   (when-not (= (indices x) (indices y) (indices z))
+     (throw (dragan-says-ex "Compressed sparse operation with incompatible indices is not allowed." {:x x :y y :z z}))))
+  ([x y z w]
+   (when-not (= (indices x) (indices y) (indices z) (indices w))
+     (throw (dragan-says-ex "Compressed sparse operation with incompatible indices is not allowed." {:x x :y y :z z :w w}))))
+  ([x y z w ws]
+   (when-not (apply = (indices x) (indices y) (indices z) (indices w) (map indices ws))
+     (throw (dragan-says-ex "Compressed sparse operation with incompatible indices is not allowed." {:x x :y y :z z :w w :ws ws})))))
+
+(extend-type CSVector
+  Functor
+  (fmap
+    ([x g]
+     (cs-vector (dim x) (view (indices x)) (fmap (entries x) g)))
+    ([x g ys]
+     (if (apply = (indices x) (map indices ys))
+       (cs-vector (dim x) (view (indices x)) (fmap (entries x) g (entries ys)))
+       (throw (dragan-says-ex "Compressed sparse operation with incompatible indices is not allowed." {:x x :ys ys})))))
+  PseudoFunctor
+  (fmap!
+    ([x f]
+     (fmap! (entries x) f)
+     x)
+    ([x f y]
+     (check-indices x y)
+     (fmap! (entries x) f (entries y))
+     x)
+    ([x f y z]
+     (check-indices x y z)
+     (fmap! (entries x) f (entries y) (entries z))
+     x)
+    ([x f y z v]
+     (check-indices x y z v)
+     (fmap! (entries x) f (entries y) (entries z) (entries v))
+     x)
+    ([x f y z v ws]
+     (check-indices x y z v ws)
+     (fmap! (entries x) f (entries y) (entries z) (entries v) (entries ws))
+     x))
+  Foldable
+  (fold
+    ([x]
+     (fold (entries x)))
+    ([x f init]
+     (fold (entries x) f init))
+    ([x f init y]
+     (check-indices x y)
+     (fold (entries x) f init (entries y)))
+    ([x f init y z]
+     (check-indices x y z)
+     (fold (entries x) f init (entries y) (entries z)))
+    ([x f init y z v]
+     (check-indices x y z v)
+     (fold (entries x) f init (entries y) (entries z) (entries v)))
+    ([x f init y z v ws]
+     (check-indices x y z v ws)
+     (fold (entries x) f init (entries y) (entries z) (entries v) (entries ws))))
+  (foldmap
+    ([x g]
+     (foldmap (entries x) g))
+    ([x g f init]
+     (foldmap (entries x) g f init))
+    ([x g f init y]
+     (check-indices x y)
+     (foldmap (entries x) g f init (entries y)))
+    ([x g f init y z]
+     (check-indices x y z)
+     (foldmap (entries x) g f init (entries y) (entries z)))
+    ([x g f init y z v]
+     (check-indices x y z v)
+     (foldmap (entries x) g f init (entries y) (entries z) (entries v)))
+    ([x g f init y z v ws]
+     (check-indices x y z v ws)
+     (foldmap (entries x) g f init (entries y) (entries z) (entries v) (entries ws)))))
+
 (defmethod print-method CSVector [^Vector x ^java.io.Writer w]
-  (.write w (format "%s\n%s" (str x) ))
+  (.write w (format "%s\n" (str x)))
   (when-not (null? (buffer (indices x)))
     (pr-str (seq (indices x))))
   (when-not (null? (buffer (entries x)))
