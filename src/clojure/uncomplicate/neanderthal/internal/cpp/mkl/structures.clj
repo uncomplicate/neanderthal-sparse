@@ -200,12 +200,13 @@
 
 (defn csr-matrix
   ([m n indx pb pe nzx ^LayoutNavigator nav desc]
-   (let [fact (factory nzx)]
+   (let [fact (factory nzx)
+         [sp-m sp-n] (if (.isColumnMajor nav) [n m] [m n])]
      (if (compatible? (index-factory nzx) indx)
-       (if (and (<= 0 (dim indx) (dim nzx)) (<= (long (if (.isColumnMajor nav) n m)) (dim pe) (dim pb))
+       (if (and (<= 0 (dim indx) (dim nzx)) (<= (long sp-m) (dim pe) (dim pb))
                 (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx)) (fits? indx nzx)) ;;TODO better error message. Perhaps automatize (.isColumnmajor part)
          (->CSRMatrix nav fact (csr-engine fact)
-                      (create-csr (buffer nzx) 0 (max 1 (long m)) (max 1 (long n))
+                      (create-csr (buffer nzx) 0 (max 1 (long sp-m)) (max 1 (long sp-n))
                                   (buffer pb) (buffer pe) (buffer indx))
                       desc nzx indx pb pe m n)
          (dragan-says-ex "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx}));;TODO error message

@@ -773,10 +773,10 @@
 
 
 (deftype LongGEEngine [])
-(integer-ge-blas* DoubleGEEngine "d" coerce-double-ptr long-double mkl_rt mkl_rt 1)
+(integer-ge-blas* LongGEEngine "d" coerce-double-ptr long-double mkl_rt mkl_rt 1)
 
 (deftype IntGEEngine [])
-(integer-ge-blas* FloatGEEngine "s" coerce-float-ptr int-float mkl_rt mkl_rt 1)
+(integer-ge-blas* IntGEEngine "s" coerce-float-ptr int-float mkl_rt mkl_rt 1)
 
 (deftype ShortGEEngine []) ;; TODO
 

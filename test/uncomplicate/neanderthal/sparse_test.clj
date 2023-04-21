@@ -244,11 +244,12 @@
          (mv! (csr factory 2 3 [[0 1 2] [1 2 3] [0 1 2] [10 20 30]])
               (vctr factory 7 0 4) (vctr factory 0 0)) => (vctr factory 19 190)
 
-         ;; (mv! 2.0 (ge factory 2 3 [1 2 3 4 5 6])
-         ;;      (vctr factory 1 2 3) 3.0 (vctr factory 1 2)) => (vctr factory 47 62)
+         (mv! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+              (vctr factory 1 2 3) 3.0 (vctr factory 1 2)) => (vctr factory 47 62)
 
-         ;; (mv! 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (vctr factory 1 2 3) 0.0 (vctr factory 0 0))
-         ;; => (mv 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (vctr factory 1 2 3))
+         (mv! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+              (vctr factory 1 2 3) 0.0 (vctr factory 0 0))
+         => (mv 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (vctr factory 1 2 3))
 
          ;; (mv! 2.0 (submatrix (ge factory 4 6 (range 24)) 1 2 2 3)
          ;;      (vctr factory [1 3 5]) 3.0 (vctr factory [2 3]))
@@ -262,11 +263,14 @@
          ;;      (row (ge factory 2 3 (range 6)) 1) 3.0 (col (ge factory 2 3 (range 6)) 1))
          ;; => (vctr factory 272 293)
 
-         ;; (mv! (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (vctr factory 1 2 3) (vctr factory 0 0))
-         ;; => (mv! (ge factory 2 3 [1 2 3 4 5 6] {:layout :column}) (vctr factory 1 2 3) (vctr factory 0 0))
+         (mv! (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]] {:layout :row})
+              (vctr factory 1 2 3) (vctr factory 0 0))
+         => (mv! (csr factory 2 3 [[0 1] [1 2] [0 1] [3 4] [0 1] [5 6]] {:layout :column})
+                 (vctr factory 1 2 3) (vctr factory 0 0))
 
-         ;; (mv 2.0 (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (vctr factory 1 2 3) (vctr factory 0 0))
-         ;; => (vctr factory 44 56)
+         (mv 2.0 (csr factory 2 30 [[1 2 4] [1 3 5] [1 2 4] [2 4 6]] {:layout :row})
+             (vctr factory (into [0 1 2 0 3] (repeat 25 0))) (vctr factory 0 0))
+         => (vctr factory 44 56)
          ))
 
 (test-csr-mv mkl-float)
