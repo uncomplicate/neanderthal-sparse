@@ -230,10 +230,11 @@
          (view-ge (csv factory 10 [1 3 5] 1 2 3 4)) => (ge factory 3 1 [1 2 3])
          (csv factory 10 nil) => (csv factory 10)
          (dim (csv factory 0 [])) => 0
-         (csv factory 10 [1 3 5]) => (zero (csv factory 10 [1 3 5] [1 2 3]))))
+         (csv factory 10 [1 3 5]) => (zero (csv factory 10 [1 3 5] [1 2 3]))
+         (csv factory 2 3 [[3] [0] [1] [0]]) => (throws ExceptionInfo)))
 
 (defn test-csr-mv [factory]
-  (facts "BLAS 2 CSR mv!"
+  (facts "BLAS 2 GE CSR mv!"
          (mv! 2.0 (csr factory 3 2 [[1] [1.0] [0] [1.0] [2] [0.0]] )
               (vctr factory 1 2 3) 3 (vctr factory [1 2 3 4])) => (throws ExceptionInfo)
 
@@ -270,10 +271,59 @@
 
          (mv 2.0 (csr factory 2 30 [[1 2 4] [1 3 5] [1 2 4] [2 4 6]] {:layout :row})
              (vctr factory (into [0 1 2 0 3] (repeat 25 0))) (vctr factory 0 0))
-         => (vctr factory 44 56)
-         ))
+         => (vctr factory 44 56)))
 
 (test-csr-mv mkl-float)
+
+#_(defn test-csr-mm [factory]
+  (facts "BLAS 3 GE CSR mm!"
+         (mm! 2.0 (csr factory 3 2 [[0 1] [1 2] [0 1] [3 4] [0 1] [5 6]]) (ge factory 3 2 [1 2 3 4 5 6])
+              3.0 (ge factory 3 2 [1 2 3 4 5 6])) => (throws ExceptionInfo)
+
+         ;; (mm! 2.0 (ge factory 3 2 [1 2 3 4 5 6]) (ge factory 2 3 [1 2 3 4 5 6])
+         ;;      3.0 (ge factory 3 2 [1 2 3 4 5 6])) => (throws ExceptionInfo)
+
+         ;; (with-release [c (ge factory 2 2 [1 2 3 4])]
+         ;;   (identical? (mm! 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (ge factory 3 2 [1 2 3 4 5 6]) 3.0 c) c))
+         ;; => true
+
+         ;; (mm! 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (ge factory 3 2 [1 2 3 4 5 6])
+         ;;      3.0 (ge factory 2 2 [1 2 3 4])) => (ge factory 2 2 [47 62 107 140])
+
+         ;; (mm! 2.0 (ge factory 3 5 (take 15 (repeat 1))) (ge factory 5 3 (take 15 (repeat 1)))
+         ;;      3.0 (ge factory 3 3 (take 9 (repeat 0)))) => (ge factory 3 3 (take 9 (repeat 10)))
+
+         ;; (mm! 2.0 (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (ge factory 3 2 [1 4 2 5 3 6] {:layout :row})
+         ;;      3.0  (ge factory 2 2 [1 2 3 4])) => (ge factory 2 2 [47 62 107 140])
+
+         ;; (mm 2.0 (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (ge factory 3 2 [1 4 2 5 3 6] {:layout :row})
+         ;;     3.0  (ge factory 2 2 [1 2 3 4])) => (throws ClassCastException)
+
+         ;; (mm (ge factory 2 3 [1 2 3 4 5 6]) (ge factory 3 2 [1 2 3 4 5 6]))
+         ;; => (ge factory 2 2 (list 22.0 28.0 49.0 64.0))
+
+         ;; (with-release [a (ge factory 2 3 (range 1 7 0.1))
+         ;;                b (ge factory 3 2 (range 0.1 9 0.2))
+         ;;                c (ge factory 2 3 (range 3 5 0.11))
+         ;;                d (ge factory 3 2 (range 2 19))
+         ;;                ab (mm a b)
+         ;;                cd (mm c d)
+         ;;                abcd (mm ab cd)
+         ;;                abcd-comp (mm a b c d)]
+         ;;   abcd-comp => abcd)
+
+         ;; (with-release [a (ge factory 2 2 (range 1 7 0.1))
+         ;;                b (ge factory 2 2 (range 0.1 9 0.2))
+         ;;                c (ge factory 2 2 (range 3 5 0.11))
+         ;;                d (ge factory 2 2 (range 2 19))
+         ;;                ab (mm a b)
+         ;;                abc (mm ab c)
+         ;;                abcd (mm abc d)
+         ;;                abcd-comp (mm a b c d)]
+         ;;   abcd-comp => abcd
+         ))
+
+
 
 
 (defn test-block [factory0 factory1]
@@ -291,6 +341,7 @@
 
 (defn test-core [factory]
   (test-csv-constructor factory)
+  (test-csr-mv factory)
   )
 
 (defn test-all [factory0 factory1]

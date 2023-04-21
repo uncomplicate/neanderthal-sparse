@@ -53,29 +53,29 @@
    (safe (position! (double-pointer (.buffer x)) i))))
 
 ;; TODO Copied from host
-(defn vector-imax [^RealVector x]
-  (let [cnt (.dim x)]
-    (if (< 0 cnt)
-      (loop [i 1 max-idx 0 max-val (.entry x 0)]
-        (if (< i cnt)
-          (let [v (.entry x i)]
-            (if (< max-val v)
-              (recur (inc i) i v)
-              (recur (inc i) max-idx max-val)))
-          max-idx))
-      0)))
+(defmacro vector-iopt [opt x entry]
+  `(let [cnt# (dim ~x)]
+     (if (< 0 cnt#)
+       (loop [i# 1 max-idx# 0 opt-val# (~entry ~x 0)]
+         (if (< i# cnt#)
+           (let [v# (~entry ~x i#)]
+             (if (~opt opt-val# v#)
+               (recur (inc i#) i# v#)
+               (recur (inc i#) max-idx# opt-val#)))
+           max-idx#))
+       0)))
 
-(defn vector-imin [^RealVector x]
-  (let [cnt (.dim x)]
-    (if (< 0 cnt)
-      (loop [i 1 min-idx 0 min-val (.entry x 0)]
-        (if (< i cnt)
-          (let [v (.entry x i)]
-            (if (< v min-val)
-              (recur (inc i) i v)
-              (recur (inc i) min-idx min-val)))
-          min-idx))
-      0)))
+(defmacro vector-iaopt [opt x entry]
+  `(let [cnt# (dim ~x)]
+     (if (< 0 cnt#)
+       (loop [i# 1 max-idx# 0 opt-val# (Math/abs (~entry ~x 0))]
+         (if (< i# cnt#)
+           (let [v# (Math/abs (~entry ~x i#))]
+             (if (~opt opt-val# v#)
+               (recur (inc i#) i# v#)
+               (recur (inc i#) max-idx# opt-val#)))
+           max-idx#))
+       0)))
 
 (defmacro full-storage-reduce
   ([a b len buff-a buff-b ld-b acc init expr-direct expr]

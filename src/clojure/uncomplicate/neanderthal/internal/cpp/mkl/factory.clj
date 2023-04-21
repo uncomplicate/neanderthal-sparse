@@ -13,7 +13,9 @@
             [uncomplicate.fluokitten.core :refer [fmap!]]
             [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer put!]]
             [uncomplicate.neanderthal
-             [core :refer [dim entry mrows ncols] :as core]
+             [core :refer [dim mrows ncols] :as core]
+             [real :as real]
+             [integer :as integer]
              [math :refer [f=] :as math]
              [block :refer [create-data-source initialize offset stride contiguous?]]]
             [uncomplicate.neanderthal.internal
@@ -24,7 +26,7 @@
              [structures :refer :all]
              [lapack :refer :all]
              [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
-                           vector-imax vector-imin ge-map ge-reduce full-matching-map]]]
+                           vector-iopt vector-iaopt ge-map ge-reduce full-matching-map vector-iamax]]]
             [uncomplicate.neanderthal.internal.cpp.mkl
              [core :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr export-csr]]
              [structures :refer [ge-csr-matrix spmat descr]]])
@@ -119,10 +121,10 @@
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
      (asum [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (iamax [_# _#]
-       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (iamin [_# _#]
-       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (iamax [this# x#]
+       (vector-iaopt < x# integer/entry))
+     (iamin [this# x#]
+       (vector-iaopt > x# integer/entry))
      (rot [_# _# _# _# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
      (rotg [_# _#]
@@ -142,17 +144,19 @@
 (defmacro integer-vector-blas-plus* [name t ptr cast blas lapack chunk]
   `(extend-type ~name
      BlasPlus
-     (amax [_# _#]
-       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (amax [this# x#]
+       (if (< 0 (dim x#))
+         (Math/abs (integer/entry x# (iamax this# x#)))
+         0))
      (subcopy [_# x# y# kx# lx# ky#]
        (patch-subcopy (long ~chunk) ~blas ~(cblas t 'copy) ~ptr x# y# (long kx#) (long lx#) (long ky#))
        y#)
      (sum [_# _#]
        (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (imax [_# _#]
-       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
-     (imin [_# _#]
-       (throw (UnsupportedOperationException. INTEGER_UNSUPPORTED_MSG)))
+     (imax [this# x#]
+       (vector-iopt < x# integer/entry))
+     (imin [this# x#]
+       (vector-iopt > x# integer/entry))
      (set-all [_# alpha# x#]
        (patch-vector-laset (long ~chunk) ~lapack ~(lapacke t 'laset) ~ptr (~cast alpha#) x#)
        x#)
@@ -196,7 +200,7 @@
      (rotmg [this# d1d2xy# param#]
        (check-stride d1d2xy# param#)
        (. ~blas ~(cblas t 'rotmg)
-          (~ptr d1d2xy#) (~ptr d1d2xy# 1) (~ptr d1d2xy# 2) (~cast (entry d1d2xy# 3)) (~ptr param#)))
+          (~ptr d1d2xy#) (~ptr d1d2xy# 1) (~ptr d1d2xy# 2) (~cast (real/entry d1d2xy# 3)) (~ptr param#)))
      (scal [this# alpha# x#]
        (. ~blas ~(cblas t 'scal) (dim x#) (~cast alpha#) (~ptr x#) (stride x#))
        x#)
@@ -216,7 +220,7 @@
      BlasPlus
      (amax [this# x#]
        (if (< 0 (dim x#))
-         (Math/abs (double (entry x# (iamax this# x#))))
+         (Math/abs (real/entry x# (iamax this# x#)))
          0.0))
      (subcopy [this# x# y# kx# lx# ky#]
        (. ~blas ~(cblas t 'copy) (int lx#) (~ptr x# kx#) (stride x#) (~ptr y# ky#) (stride y#))
@@ -224,9 +228,9 @@
      (sum [this# x#]
        (. ~blas ~(cblas t 'dot) (dim x#) (~ptr x#) (stride x#) (~ptr ~ones) 0))
      (imax [this# x#]
-       (vector-imax x#))
+       (vector-iopt < x# real/entry))
      (imin [this# x#]
-       (vector-imin x#))
+       (vector-iopt > x# real/entry))
      (set-all [this# alpha# x#]
        (with-lapack-check
          (. ~lapack ~(lapacke t 'laset) ~(int (:row blas-layout)) ~(byte (int \g)) (dim x#) 1
@@ -816,9 +820,9 @@
      (asum [this# x#]
        (asum (engine (entries x#)) (entries x#)))
      (iamax [this# x#]
-       (entry (indices x#) (iamax (engine (entries x#)) (entries x#))))
+       (real/entry (indices x#) (iamax (engine (entries x#)) (entries x#))))
      (iamin [this# x#]
-       (entry (indices x#) (iamin (engine (entries x#)) (entries x#))))
+       (real/entry (indices x#) (iamin (engine (entries x#)) (entries x#))))
      (rot [this# x# y# c# s#]
        (if (indices y#)
          (rot (engine (entries x#)) (entries x#) (entries y#) c# s#)
@@ -850,9 +854,9 @@
      (sum [this# x#]
        (sum (engine (entries x#)) (entries x#)))
      (imax [this# x#]
-       (entry (indices x#) (vector-imax (entries x#))))
+       (imax (engine (entries x#)) (entries x#)))
      (imin [this# x#]
-       (entry (indices x#) (vector-imin (entries x#))))
+       (imin (engine (entries x#)) (entries x#)))
      (set-all [this# alpha# x#]
        (set-all (engine (entries x#)) alpha# (entries x#))
        x#)

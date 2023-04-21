@@ -11,7 +11,8 @@
              [core :refer [with-release let-release Info info Releaseable release view]]
              [utils :refer [dragan-says-ex direct-buffer]]]
             [uncomplicate.neanderthal
-             [core :refer [dim transfer transfer! subvector matrix?]]]
+             [core :refer [dim transfer transfer! subvector matrix?]]
+             [integer :refer [amax]]]
             [uncomplicate.neanderthal.internal
              [api :as api]
              [navigation :refer :all]]
@@ -60,7 +61,7 @@
 
 (defn csr
   "TODO"
-  ([factory m n idx idx-b idx-e nz options]
+  ([factory m n idx idx-b idx-e nz options] ;; TODO error messages
    (if (and (<= 0 (long m)) (<= 0 (long n)))
      (let [idx-factory (api/index-factory factory)]
        (let-release [idx (if (api/compatible? idx-factory idx)
@@ -74,6 +75,10 @@
                              (transfer idx-factory idx-e))
                      res (create-ge-csr (api/factory factory) m n idx idx-b idx-e
                                         (= :column (:layout options)) true)]
+         (when-not (and (<= (long (amax idx)) (dim (entries res)))
+                        (< (long (amax idx-b)) (dim idx)) (<= (long (amax idx-e)) (dim idx)))
+           (dragan-says-ex "Sparse index outside of bounds."
+                           {:requested (amax idx) :available (dim (entries res))}))
          (when nz (transfer! nz (entries res)))
          res))
      (dragan-says-ex "Compressed sparse matrix cannot have a negative dimension." {:m m :n n})))
@@ -100,5 +105,3 @@
      (if (csr? res)
        res
        (dragan-says-ex "This is not a valid source for CSR matrices.")))))
-
-;; TODO Implement print-method and transfer! functions for matrices, so you can test them more easily. Then, write tests, and subvectors etc. Along the way, implement missing features and Sparse operations.
