@@ -8,10 +8,10 @@
 
 (ns uncomplicate.neanderthal.sparse-test
   (:require [midje.sweet :refer [facts throws =>]]
-            [uncomplicate.commons.core :refer [with-release release]]
+            [uncomplicate.commons.core :refer [with-release release view]]
             [uncomplicate.fluokitten.core :refer [fmap fmap! fold foldmap]]
             [uncomplicate.neanderthal.core :refer :all]
-            [uncomplicate.neanderthal.sparse :refer [csv csr]]
+            [uncomplicate.neanderthal.sparse :refer [csv csr csv? csr?]]
             [uncomplicate.neanderthal.internal.cpp.structures :refer [entries indices];;TODO
              ]
             [uncomplicate.neanderthal.internal.cpp.mkl
@@ -147,6 +147,9 @@
      (transfer! (transfer! x1 a0) x0) => x1
      (transfer! (transfer! y1 a1) y0) => y1)))
 
+
+;; =================== Fluokitten ============================
+
 (defn test-csv-functor [factory]
   (with-release [fx (fn [] (csv factory 10 [1 3 5 7] [1 2 3 4]))
                  fy (fn [] (csv factory 10 [1 3 5 7] [2 3 4 5]))
@@ -214,8 +217,62 @@
          ;; (seq (row (ge factory 2 3 (range 6)) 1)) => '(1.0 3.0 5.0) TODO
          ))
 
+;; =================== Neanderthal core  ============================
 
-(defn test-all [factory0 factory1]
+(defn test-csv-constructor [factory]
+  (facts "Create a compressed sparse vector."
+         (csv? (csv factory 10 [1 3 5] [1 2 3])) => true
+         (csv factory 10 [1 3 5] 1 2 3) => (csv factory 10 [1 3 5] [1 2 3])
+         (csv factory 3) => (csv factory 3 [])
+         (view (csv factory 10 [1 3 5] 1 2 3)) => (csv factory 10 [1 3 5] 1 2 3)
+         (view-vctr (csv factory 10 [1 3 5] (range 8))) => (vctr factory [0 1 2])
+         (view-vctr (csv factory 10 [1 3 5] (range 8)) 3) => (vctr factory [0])
+         (view-ge (csv factory 10 [1 3 5] 1 2 3 4)) => (ge factory 3 1 [1 2 3])
+         (csv factory 10 nil) => (csv factory 10)
+         (dim (csv factory 0 [])) => 0
+         (csv factory 10 [1 3 5]) => (zero (csv factory 10 [1 3 5] [1 2 3]))))
+
+(defn test-csr-mv [factory]
+  (facts "BLAS 2 CSR mv!"
+         (mv! 2.0 (csr factory 3 2 [[1] [1.0] [0] [1.0] [2] [0.0]] )
+              (vctr factory 1 2 3) 3 (vctr factory [1 2 3 4])) => (throws ExceptionInfo)
+
+         (with-release [y (vctr factory [1 2 3])]
+           (identical? (mv! 2 (csr factory 3 2 [[0] [1] [0] [2] [0] [3]]) (vctr factory 1 2) 3 y) y))
+         => true
+
+         (mv! (csr factory 2 3 [[0 1 2] [1 2 3] [0 1 2] [10 20 30]])
+              (vctr factory 7 0 4) (vctr factory 0 0)) => (vctr factory 19 190)
+
+         ;; (mv! 2.0 (ge factory 2 3 [1 2 3 4 5 6])
+         ;;      (vctr factory 1 2 3) 3.0 (vctr factory 1 2)) => (vctr factory 47 62)
+
+         ;; (mv! 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (vctr factory 1 2 3) 0.0 (vctr factory 0 0))
+         ;; => (mv 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (vctr factory 1 2 3))
+
+         ;; (mv! 2.0 (submatrix (ge factory 4 6 (range 24)) 1 2 2 3)
+         ;;      (vctr factory [1 3 5]) 3.0 (vctr factory [2 3]))
+         ;; => (vctr factory 272 293)
+
+         ;; (mv! 2.0 (submatrix (ge factory 4 6 (range 24)) 1 2 2 3)
+         ;;      (vctr factory [1 3 5]) 3.0 (col (ge factory 2 3 (range 6)) 1))
+         ;; => (vctr factory 272 293)
+
+         ;; (mv! 2.0 (submatrix (ge factory 4 6 (range 24)) 1 2 2 3)
+         ;;      (row (ge factory 2 3 (range 6)) 1) 3.0 (col (ge factory 2 3 (range 6)) 1))
+         ;; => (vctr factory 272 293)
+
+         ;; (mv! (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (vctr factory 1 2 3) (vctr factory 0 0))
+         ;; => (mv! (ge factory 2 3 [1 2 3 4 5 6] {:layout :column}) (vctr factory 1 2 3) (vctr factory 0 0))
+
+         ;; (mv 2.0 (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (vctr factory 1 2 3) (vctr factory 0 0))
+         ;; => (vctr factory 44 56)
+         ))
+
+(test-csr-mv mkl-float)
+
+
+(defn test-block [factory0 factory1]
   (test-create factory0)
   (test-equality factory0)
   (test-release factory0)
@@ -227,6 +284,14 @@
   (test-csv-fold factory0)
   (test-csv-reducible factory0)
   (test-csv-seq factory0))
+
+(defn test-core [factory]
+  (test-csv-constructor factory)
+  )
+
+(defn test-all [factory0 factory1]
+  (test-block factory0 factory1)
+  (test-core factory0))
 
 (test-all mkl-float mkl-double)
 (test-all mkl-double mkl-float)

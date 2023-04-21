@@ -37,7 +37,7 @@
      (let-release [idx (if (api/compatible? idx-factory idx)
                          (view idx)
                          (transfer idx-factory idx))
-                   res (cs-vector factory n (view idx) (not (seq nz)))]
+                   res (cs-vector factory n (view idx) true)]
        (if-not nzs
          (transfer! nz (entries res))
          (transfer! (cons nz nzs) (entries res)))

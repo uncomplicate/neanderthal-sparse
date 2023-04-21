@@ -27,7 +27,7 @@
                            vector-imax vector-imin ge-map ge-reduce full-matching-map]]]
             [uncomplicate.neanderthal.internal.cpp.mkl
              [core :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr export-csr]]
-             [structures :refer [ge-csr-matrix]]])
+             [structures :refer [ge-csr-matrix spmat descr]]])
   (:import java.nio.ByteBuffer
            [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
             GEMatrix DenseStorage]
@@ -886,6 +886,11 @@
 
 ;; =================== Sparse Matrix engines ======================================
 
+(defn sparse-transpose ^long [a]
+  (if (.isColumnMajor (navigator a))
+    mkl_rt/SPARSE_OPERATION_TRANSPOSE
+    mkl_rt/SPARSE_OPERATION_NON_TRANSPOSE))
+
 (defmacro real-csr-blas* [name t ptr cast]
   `(extend-type ~name
      Blas
@@ -898,15 +903,13 @@
      (copy [_# a# b#]
        (mkl-sparse-copy (~ptr a#) (~ptr b#))
        b#)
-
-
-     ;; (mv
-     ;;   ([_# alpha# a# x# beta# y#]
-     ;;    (. ~mkl_rt ~(mkl-sparse 't 'mv) (int operation#) (~cast alpha#) (buffer a#) (descr a#)
-     ;;       (~ptr x#) (~cast beta#) (~ptr y#))
-     ;;    y#)
-     ;;   ([_# a# _#]
-     ;;    (dragan-says-ex "In-place mv! is not supported sparse matrices." {:a (info a#)})))
+     (mv
+       ([_# alpha# a# x# beta# y#]
+        (. ~mkl_rt ~(mkl-sparse t 'mv) (sparse-transpose a#) (~cast alpha#) (spmat a#) (descr a#)
+           (~ptr x#) (~cast beta#) (~ptr y#))
+        y#)
+       ([_# a# _#]
+        (dragan-says-ex "In-place mv! is not supported for sparse matrices." {:a (info a#)})))
      ;; (mm
      ;;   ([_# alpha# a# b# _#]
      ;;    (let-release [c# (sparse-matrix)]

@@ -761,7 +761,18 @@
           (cs-vector n native-indx native-nzx)))))
   Viewable
   (view [x]
-    (cs-vector fact (view nzx) (view indx)))
+    (cs-vector n (view indx) (view nzx)))
+  DenseContainer
+  (view-vctr [_]
+    nzx)
+  (view-vctr [_ stride-mult]
+    (view-vctr nzx stride-mult))
+  (view-ge [_]
+    (view-ge nzx))
+  (view-ge [_ stride-mult]
+    (view-ge nzx stride-mult))
+  (view-ge [_ m n]
+    (view-ge nzx m n))
   Block
   (buffer [_]
     (.buffer nzx))
@@ -822,7 +833,7 @@
                  nzx (create-vector fact 0 false)]
      (cs-vector n indx nzx))))
 
-(defn check-indices
+(defn check-indices ;;TODO macroize
   ([x y]
    (when-not (= (indices x) (indices y))
      (throw (dragan-says-ex "Compressed sparse operation with incompatible indices is not allowed." {:x x :y y}))))

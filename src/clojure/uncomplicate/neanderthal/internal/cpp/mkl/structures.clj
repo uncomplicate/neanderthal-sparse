@@ -29,7 +29,7 @@
    [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [create-csr matrix-descr]])
   (:import [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
             IFn$LDD IFn$LLDD IFn$LLL IFn$LLLL]
-           org.bytedeco.mkl.global.mkl_rt
+           [org.bytedeco.mkl.global mkl_rt mkl_rt$sparse_matrix mkl_rt$matrix_descr]
            [uncomplicate.neanderthal.internal.api Block Matrix DataAccessor RealNativeMatrix
             IntegerVector LayoutNavigator MatrixImplementation RealAccessor IntegerAccessor]
            uncomplicate.neanderthal.internal.cpp.structures.CSVector))
@@ -110,6 +110,9 @@
   DataAccessorProvider
   (data-accessor [_]
     (data-accessor fact))
+  Navigable
+  (navigator [_]
+    nav)
   Container
   (raw [a]
     (raw a fact))
@@ -128,6 +131,17 @@
   Viewable
   (view [a]
     (csr-matrix m n (view indx) (view pb) (view pe) (view nzx) nav (view desc)))
+  DenseContainer
+  (view-vctr [_]
+    nzx)
+  (view-vctr [_ stride-mult]
+    (view-vctr nzx stride-mult))
+  (view-ge [_]
+    (view-ge nzx))
+  (view-ge [_ stride-mult]
+    (view-ge nzx stride-mult))
+  (view-ge [_ m n]
+    (view-ge nzx m n))
   Block
   (buffer [_]
     (.buffer nzx))
@@ -177,6 +191,12 @@
     pb)
   (indexe [_]
     pe))
+
+(defn ^mkl_rt$sparse_matrix spmat [^CSRMatrix a]
+  (.spm a))
+
+(defn ^mkl_rt$matrix_descr descr [^CSRMatrix a]
+  (.desc a))
 
 (defn csr-matrix
   ([m n indx pb pe nzx ^LayoutNavigator nav desc]
