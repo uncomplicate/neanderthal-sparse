@@ -11,9 +11,7 @@
             [uncomplicate.neanderthal
              [core :refer [dim mrows ncols]]
              [block :refer [offset stride]]]
-            [uncomplicate.neanderthal.internal
-             [api :refer [navigator]]
-             ])
+            [uncomplicate.neanderthal.internal.api :refer [navigator]])
   (:import [org.bytedeco.mkl.global mkl_rt]))
 
 (defmacro with-lapack-check [expr]

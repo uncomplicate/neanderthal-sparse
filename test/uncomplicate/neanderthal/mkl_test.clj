@@ -55,5 +55,4 @@
 (test-host mkl-float)
 (test-host mkl-double)
 
-
 ;; ================= Sparse tests ===============================

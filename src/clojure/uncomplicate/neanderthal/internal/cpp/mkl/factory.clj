@@ -9,9 +9,9 @@
 (ns uncomplicate.neanderthal.internal.cpp.mkl.factory
   (:require [uncomplicate.commons
              [core :refer [with-release let-release info Releaseable release view]]
-             [utils :refer [dragan-says-ex generate-seed]]]
+             [utils :refer [dragan-says-ex with-check generate-seed]]]
             [uncomplicate.fluokitten.core :refer [fmap!]]
-            [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer put!]]
+            [uncomplicate.clojure-cpp :refer [long-pointer float-pointer double-pointer]]
             [uncomplicate.neanderthal
              [core :refer [dim mrows ncols] :as core]
              [real :as real]
@@ -25,10 +25,9 @@
             [uncomplicate.neanderthal.internal.cpp
              [structures :refer :all]
              [lapack :refer :all]
-             [blas :refer [float-ptr double-ptr int-ptr coerce-double-ptr coerce-float-ptr
-                           vector-iopt vector-iaopt ge-map ge-reduce full-matching-map vector-iamax]]]
+             [blas :refer [float-ptr double-ptr int-ptr vector-iopt vector-iaopt ge-map ge-reduce full-matching-map]]]
             [uncomplicate.neanderthal.internal.cpp.mkl
-             [core :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr export-csr]]
+             [core :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr sparse-error]]
              [structures :refer [ge-csr-matrix spmat descr]]])
   (:import java.nio.ByteBuffer
            [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
@@ -75,7 +74,7 @@
 
 (defmacro patch-vector-method [chunk blas method ptr x y]
   (if (= 1 chunk)
-    `(. ~blas ~method (dim ~x) (~ptr ~x) (stride ~x) (~ptr ~y) (stride ~y))
+    `(. ~blas ~method (dim ~x) (~ptr ~x 0) (stride ~x) (~ptr ~y 0) (stride ~y))
     `(if (= 0 (rem (dim ~x) ~chunk))
        (. ~blas ~method (quot (dim ~x) ~chunk) (~ptr ~x 0) (stride ~x) (~ptr ~y 0) (stride ~y))
        (dragan-says-ex SHORT_UNSUPPORTED_MSG {:dim-x (dim ~x)}))))
@@ -93,7 +92,7 @@
   (if (= 1 chunk)
     `(with-lapack-check
        (. ~lapack ~method ~(int (:row blas-layout)) ~(byte (int \g))
-          (dim ~x) 1 ~alpha ~alpha (~ptr ~x) (stride ~x)))
+          (dim ~x) 1 ~alpha ~alpha (~ptr ~x 0) (stride ~x)))
     `(do
        (check-stride ~x)
        (if (= 0 (rem (dim ~x) ~chunk))
@@ -441,10 +440,8 @@
 (defmacro real-vector-math* [name t ptr cast]
   `(real-math* ~name ~t ~ptr ~cast vector-math vector-linear-frac vector-powx))
 
-(def ^:private ones-float (->RealBlockVector nil nil nil true
-                                             (doto (float-pointer 1) (put! 0 1.0)) 1 0))
-(def ^:private ones-double (->RealBlockVector nil nil nil true
-                                              (doto (double-pointer 1) (put! 0 1.0)) 1 0))
+(def ^:private ones-float (->RealBlockVector nil nil nil true (float-pointer [1.0]) 1 0))
+(def ^:private ones-double (->RealBlockVector nil nil nil true (double-pointer [1.0]) 1 0))
 
 (defn cast-stream ^mkl_rt$VSLStreamStatePtr [stream]
   (or stream default-rng-stream))
@@ -498,20 +495,20 @@
 (real-vector-rng* DoubleVectorEngine "d" double-ptr double)
 
 (deftype LongVectorEngine [])
-(integer-vector-blas* LongVectorEngine "d" coerce-double-ptr mkl_rt 1)
-(integer-vector-blas-plus* LongVectorEngine "d" coerce-double-ptr long-double mkl_rt mkl_rt 1)
+(integer-vector-blas* LongVectorEngine "d" double-ptr mkl_rt 1)
+(integer-vector-blas-plus* LongVectorEngine "d" double-ptr long-double mkl_rt mkl_rt 1)
 
 (deftype IntVectorEngine [])
-(integer-vector-blas* IntVectorEngine "s" coerce-float-ptr mkl_rt 1)
-(integer-vector-blas-plus* IntVectorEngine "s" coerce-float-ptr int-float mkl_rt mkl_rt 1)
+(integer-vector-blas* IntVectorEngine "s" float-ptr mkl_rt 1)
+(integer-vector-blas-plus* IntVectorEngine "s" float-ptr int-float mkl_rt mkl_rt 1)
 
 (deftype ShortVectorEngine [])
-(integer-vector-blas* ShortVectorEngine "s" coerce-float-ptr mkl_rt 2)
-(integer-vector-blas-plus* ShortVectorEngine "s" coerce-float-ptr short-float mkl_rt mkl_rt 2)
+(integer-vector-blas* ShortVectorEngine "s" float-ptr mkl_rt 2)
+(integer-vector-blas-plus* ShortVectorEngine "s" float-ptr short-float mkl_rt mkl_rt 2)
 
 (deftype ByteVectorEngine [])
-(integer-vector-blas* ByteVectorEngine "s" coerce-float-ptr mkl_rt 4)
-(integer-vector-blas-plus* ByteVectorEngine "s" coerce-float-ptr byte-float mkl_rt mkl_rt 4)
+(integer-vector-blas* ByteVectorEngine "s" float-ptr mkl_rt 4)
+(integer-vector-blas-plus* ByteVectorEngine "s" float-ptr byte-float mkl_rt mkl_rt 4)
 
 ;; ================= Integer GE Engine ========================================
 
@@ -777,10 +774,10 @@
 
 
 (deftype LongGEEngine [])
-(integer-ge-blas* LongGEEngine "d" coerce-double-ptr long-double mkl_rt mkl_rt 1)
+(integer-ge-blas* LongGEEngine "d" double-ptr long-double mkl_rt mkl_rt 1)
 
 (deftype IntGEEngine [])
-(integer-ge-blas* IntGEEngine "s" coerce-float-ptr int-float mkl_rt mkl_rt 1)
+(integer-ge-blas* IntGEEngine "s" float-ptr int-float mkl_rt mkl_rt 1)
 
 (deftype ShortGEEngine []) ;; TODO
 
@@ -844,7 +841,7 @@
             (~cast alpha#) (~ptr x#) (~idx-ptr (indices x#)) (~ptr y#)))
        y#)))
 
-(defmacro real-cs-vector-blas-plus* [name t ptr idx-ptr cast blas]
+(defmacro real-cs-blas-plus* [name t ptr cast]
   `(extend-type ~name
      BlasPlus
      (amax [this# x#]
@@ -878,13 +875,13 @@
 
 (deftype FloatCSVectorEngine [])
 (real-cs-vector-blas* FloatCSVectorEngine "s" float-ptr int-ptr float mkl_rt ones-float)
-(real-cs-vector-blas-plus* FloatCSVectorEngine "s" float-ptr int-ptr float mkl_rt)
+(real-cs-blas-plus* FloatCSVectorEngine "s" float-ptr float)
 (real-vector-math* FloatCSVectorEngine "s" float-ptr float)
 (real-cs-vector-sparse-blas* FloatCSVectorEngine "s" float-ptr int-ptr mkl_rt)
 
 (deftype DoubleCSVectorEngine [])
 (real-cs-vector-blas* DoubleCSVectorEngine "d" double-ptr int-ptr double mkl_rt ones-double)
-(real-cs-vector-blas-plus* DoubleCSVectorEngine "d" double-ptr int-ptr double mkl_rt)
+(real-cs-blas-plus* DoubleCSVectorEngine "d" double-ptr double)
 (real-vector-math* DoubleCSVectorEngine "d" double-ptr double)
 (real-cs-vector-sparse-blas* DoubleCSVectorEngine "d" double-ptr int-ptr mkl_rt)
 
@@ -894,6 +891,11 @@
   (if (.isColumnMajor (navigator a))
     mkl_rt/SPARSE_OPERATION_TRANSPOSE
     mkl_rt/SPARSE_OPERATION_NON_TRANSPOSE))
+
+(defn sparse-layout ^long [a]
+  (if (.isColumnMajor (navigator a))
+    mkl_rt/SPARSE_LAYOUT_COLUMN_MAJOR
+    mkl_rt/SPARSE_LAYOUT_ROW_MAJOR))
 
 (defmacro real-csr-blas* [name t ptr cast]
   `(extend-type ~name
@@ -907,6 +909,17 @@
      (copy [_# a# b#]
        (mkl-sparse-copy (~ptr a#) (~ptr b#))
        b#)
+     (nrm1 [this# a#]
+       (asum this# a#))
+     (nrm2 [this# a#]
+       (nrm2 (engine (entries a#)) (entries a#)))
+     (nrmi [this# a#]
+       (amax this# a#))
+     (asum [this# a#]
+       (asum (engine (entries a#)) (entries a#)))
+     (scal [this# alpha# a#]
+       (scal (engine (entries a#)) alpha# (entries a#))
+       a#)
      (mv
        ([_# alpha# a# x# beta# y#]
         (. ~mkl_rt ~(mkl-sparse t 'mv) (sparse-transpose a#) (~cast alpha#) (spmat a#) (descr a#)
@@ -914,29 +927,36 @@
         y#)
        ([_# a# _#]
         (dragan-says-ex "In-place mv! is not supported for sparse matrices." {:a (info a#)})))
-     ;; (mm
-     ;;   ([_# alpha# a# b# _#]
-     ;;    (let-release [c# (sparse-matrix)]
-     ;;      (with-check sparse-error
-     ;;        (. ~mkl_rt ~(mkl-sparse 't 'spmm) (int operation#) (buffer a#) (buffer b#) c#)
-     ;;        c#)))
-     ;;   ([_# alpha# a# b# beta# c# _#];;TODO alpha...
-     ;;    (if (instance? GEMatrix b#)
-     ;;      (with-check sparse-error
-     ;;        (. ~mkl_rt ~(mkl-sparse 't 'mm) (int operation#) (~cast alpha#) (buffer a#) (descr a#)
-     ;;           (int layout#) (buffer b#) (int columns#) (stride b#) (~cast beta#) (buffer c#) (stride c#))
-     ;;        c#)
-     ;;      (with-check sparse-error
-     ;;        (. ~mkl_rt ~(mkl-sparse 't 'spmmd) (int operation#) (buffer a#) (buffer b#) (int layout#)
-     ;;           (int layout#) (buffer c#) (stride c#))
-     ;;        c#))))
-     ))
+     (mm
+       ([this# alpha# a# b# _#]
+        (let-release [c# (sparse-matrix)]
+          (when-not (= 1.0 (~cast alpha#) (scal this# alpha# a#)))
+          (with-check sparse-error ;;TODO perhaps use mkl_sparse_sp2m?!
+            (. ~mkl_rt mkl_sparse_spmm (sparse-transpose a#) (spmat a#) (spmat b#) c#)
+            sparse-matrix)
+          (ge-csr-matrix (factory a#) c# (.isColumnMajor (navigator a#))))) ;; todo nav descr
+       ([this# alpha# a# b# beta# c# _#]
+        (if (instance? GEMatrix b#)
+          (with-check sparse-error
+            (. ~mkl_rt ~(mkl-sparse t 'mm) (sparse-transpose a#) (~cast alpha#) (spmat a#) (descr a#)
+               (sparse-layout b#) (~ptr b#) (ncols c#) (stride b#) (~cast beta#) (~ptr c#) (stride c#))
+            c#)
+          (do
+            (when-not (= 1.0 (~cast alpha#)) (scal this# alpha# a#))
+            (if (= 0.0 (~cast beta#))
+              (with-check sparse-error
+                (. ~mkl_rt ~(mkl-sparse t 'spmmd) (sparse-transpose a#) (spmat a#) (spmat b#)
+                   (sparse-layout c#) (~ptr c#) (stride c#))
+                c#)
+              (dragan-says-ex "Beta parameter not supported for sparse matrix multiplication." {:beta beta#}))))))))
 
 (deftype DoubleCSREngine [])
 (real-csr-blas* DoubleCSREngine "d" double-ptr double)
+(real-cs-blas-plus* DoubleCSREngine "d" double-ptr double)
 
 (deftype FloatCSREngine [])
 (real-csr-blas* FloatCSREngine "s" float-ptr float)
+(real-cs-blas-plus* FloatCSREngine "s" float-ptr float)
 
 ;; ================================================================================
 
@@ -965,6 +985,8 @@
       (when init
         (.initialize da (.buffer ^Block res)))
       res))
+  (create-vector [this master buf-ptr n ofst strd]
+    (real-block-vector this master buf-ptr n ofst strd))
   (create-ge [this m n column? init]
     (let-release [res (real-ge-matrix this m n column?)]
       (when init
@@ -1005,6 +1027,8 @@
       (when init
         (.initialize da (.buffer ^Block res)))
       res))
+  (create-vector [this master buf-ptr n ofst strd]
+    (integer-block-vector this master buf-ptr n ofst strd))
   (create-ge [this m n column? init]
     (let-release [res (integer-ge-matrix this m n column?)]
       (when init

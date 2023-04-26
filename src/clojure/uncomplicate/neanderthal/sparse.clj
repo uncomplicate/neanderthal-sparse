@@ -63,7 +63,8 @@
   "TODO"
   ([factory m n idx idx-b idx-e nz options] ;; TODO error messages
    (if (and (<= 0 (long m)) (<= 0 (long n)))
-     (let [idx-factory (api/index-factory factory)]
+     (let [idx-factory (api/index-factory factory)
+           column? (= :column (:layout options))]
        (let-release [idx (if (api/compatible? idx-factory idx)
                            (view idx)
                            (transfer idx-factory idx))
@@ -74,9 +75,10 @@
                              (view idx-e)
                              (transfer idx-factory idx-e))
                      res (create-ge-csr (api/factory factory) m n idx idx-b idx-e
-                                        (= :column (:layout options)) true)]
-         (when-not (and (<= (long (amax idx)) (dim (entries res)))
-                        (< (long (amax idx-b)) (dim idx)) (<= (long (amax idx-e)) (dim idx)))
+                                        column? true)]
+         (when-not (and (< (long (amax idx)) (max 1 (long (if column? m n))))
+                        (or (zero? (dim idx)) (< (long (amax idx-b)) (dim idx)))
+                        (<= (long (amax idx-e)) (dim idx)))
            (dragan-says-ex "Sparse index outside of bounds."
                            {:requested (amax idx) :available (dim (entries res))}))
          (when nz (transfer! nz (entries res)))

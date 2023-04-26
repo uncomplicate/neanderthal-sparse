@@ -9,26 +9,27 @@
 (ns uncomplicate.neanderthal.internal.cpp.mkl.structures
   (:require
    [uncomplicate.commons
-    [core :refer [Releaseable release let-release Info info Viewable view]]
+    [core :refer [Releaseable release let-release with-release Info info Viewable view]]
     [utils :refer [dragan-says-ex]]]
    [uncomplicate.fluokitten.protocols
     :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold]]
-   [uncomplicate.clojure-cpp :refer [pointer pointer-seq fill! capacity! byte-buffer float-pointer
-                                     double-pointer long-pointer int-pointer short-pointer byte-pointer
-                                     element-count null?]]
+   [uncomplicate.clojure-cpp :refer [get-entry fill! int-pointer pointer null? capacity]]
    [uncomplicate.neanderthal
     [core :refer [dim transfer! mrows ncols]]
-    [block :refer [entry-type offset stride buffer column?]]]
+    [block :refer [entry-type offset stride buffer column?]]
+    [integer :refer [entry]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [navigation :refer :all]
     [printing :refer [print-vector]]]
    [uncomplicate.neanderthal.internal.host.fluokitten :refer :all]
    [uncomplicate.neanderthal.internal.cpp.structures
-    :refer [CompressedSparse entries indices vector-seq csr-engine CSR]]
-   [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [create-csr matrix-descr]])
+    :refer [CompressedSparse entries indices vector-seq csr-engine CSR real-block-vector
+            integer-block-vector]]
+   [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [create-csr matrix-descr export-csr]])
   (:import [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
             IFn$LDD IFn$LLDD IFn$LLL IFn$LLLL]
+           [org.bytedeco.javacpp IntPointer]
            [org.bytedeco.mkl.global mkl_rt mkl_rt$sparse_matrix mkl_rt$matrix_descr]
            [uncomplicate.neanderthal.internal.api Block Matrix DataAccessor RealNativeMatrix
             IntegerVector LayoutNavigator MatrixImplementation RealAccessor IntegerAccessor]
@@ -204,22 +205,42 @@
          [sp-m sp-n] (if (.isColumnMajor nav) [n m] [m n])]
      (if (compatible? (index-factory nzx) indx)
        (if (and (<= 0 (dim indx) (dim nzx)) (<= (long sp-m) (dim pe) (dim pb))
-                (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx)) (fits? indx nzx)) ;;TODO better error message. Perhaps automatize (.isColumnmajor part)
+                (= 1 (stride indx) (stride nzx)) (= 0 (offset indx) (offset nzx)) (fits? indx nzx)) ;;TODO improve error message. Perhaps automatize (.isColumnmajor part)
          (->CSRMatrix nav fact (csr-engine fact)
                       (create-csr (buffer nzx) 0 (max 1 (long sp-m)) (max 1 (long sp-n))
                                   (buffer pb) (buffer pe) (buffer indx))
                       desc nzx indx pb pe m n)
-         (dragan-says-ex "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx}));;TODO error message
+         (dragan-says-ex "Non-zero vector and index vector have to fit each other." {:nzx nzx :indx indx})) ;;TODO error message
        (dragan-says-ex "Incompatible index vector." {:required (index-factory nzx) :provided (factory indx)}))))
   ([fact m n indx pb pe nav desc init]
    (let-release [nzx (create-vector fact (dim indx) init)]
-     (csr-matrix m n indx pb pe nzx nav desc))))
+     (csr-matrix m n indx pb pe nzx nav desc)))
+  ([fact sparse-matrix ^LayoutNavigator nav desc]
+   (let-release [indexing (int-pointer 1)
+                 m (int-pointer 1)
+                 n (int-pointer 1)
+                 rows-start (int-pointer nil)
+                 rows-end (int-pointer nil)
+                 col-idx (int-pointer nil)
+                 nz (pointer (data-accessor fact))]
+     (export-csr nz sparse-matrix indexing m n rows-start rows-end col-idx)
+     (let [[m n] (if (.isColumnMajor nav)
+                   [(get-entry n 0) (get-entry m 0)]
+                   [(get-entry m 0) (get-entry n 0)])
+           idx-fact (index-factory fact)
+           nzx (create-vector fact false nz (capacity nz) 0 1)
+           idx (create-vector idx-fact false col-idx (capacity col-idx) 0 1)
+           pb (create-vector idx-fact false rows-start (capacity rows-start) 0 1)
+           pe (create-vector idx-fact false rows-end (capacity rows-end) 0 1)]
+       (->CSRMatrix nav fact (csr-engine fact) sparse-matrix desc nzx idx pb pe m n)))))
 
 (defn ge-csr-matrix
   ([fact m n indx pb pe column? init]
    (csr-matrix fact m n indx pb pe (layout-navigator column?) (matrix-descr :ge) init))
   ([fact m n indx pb pe column?]
-   (csr-matrix fact m n indx pb pe column? true)))
+   (csr-matrix fact m n indx pb pe column? true))
+  ([fact sparse-matrix column?]
+   (csr-matrix fact sparse-matrix (layout-navigator column?) (matrix-descr :ge))))
 
 (defmethod print-method CSRMatrix [^CSRMatrix x ^java.io.Writer w] ;; TODO transform to nested vectors
   (.write w (format "%s\n%s" (str x) (pr-str (seq (indices x)))))

@@ -10,7 +10,8 @@
   (:require [uncomplicate.commons
              [core :refer [with-release let-release Info info Releaseable release Viewable]]
              [utils :refer [dragan-says-ex with-check]]]
-            [uncomplicate.clojure-cpp :refer [float-ptr double-ptr int-ptr null?]]
+            [uncomplicate.clojure-cpp
+             :refer [float-ptr double-ptr int-ptr int-ptr* null? get-entry capacity!]]
             [uncomplicate.neanderthal.internal.api :refer [Flippable]]
             [uncomplicate.neanderthal.internal.cpp.mkl.constants :refer :all])
   (:import [org.bytedeco.javacpp Pointer FloatPointer DoublePointer IntPointer]
@@ -195,10 +196,21 @@
        sparse-matrix#)))
 
 (defmacro export-cs [method source indexing rows cols start end indx nz]
-  `(with-check sparse-error
-     (. mkl_rt ~method (sparse-matrix ~source) (int-ptr ~indexing) (int-ptr ~rows) (int-ptr ~cols)
-        (int-ptr ~start) (int-ptr ~end) (int-ptr ~indx) ~nz)
-     ~source))
+  `(let [indexing# (int-ptr* ~indexing)
+         rows# (int-ptr* ~rows)
+         cols# (int-ptr* ~cols)
+         start# (int-ptr* ~start)
+         end# (int-ptr* ~end)
+         indx# (int-ptr* ~indx)]
+     (with-check sparse-error
+       (. mkl_rt ~method (sparse-matrix ~source) indexing# rows# cols# start# end# indx# ~nz)
+       (let [m# (long (get-entry rows# 0))
+             cnt# (get-entry end# (dec m#))]
+         (capacity! start# m#)
+         (capacity! end# m#)
+         (capacity! indx# cnt#)
+         (capacity! ~nz cnt#)
+         ~source))))
 
 (defmacro extend-sparse-pointer [name t ptr]
   `(extend-type ~name
@@ -217,10 +229,10 @@
            sparse-matrix#)))
      (export-csr [nz# source# indexing# rows# cols# rows-start# rows-end# col-indx#]
        (export-cs ~(mkl-sparse t 'export_csr) source#
-                  indexing# rows# cols# rows-start# rows-end# col-indx# (~ptr nz#)))
+                  indexing# rows# cols# rows-start# rows-end# col-indx# nz#))
      (export-csc [nz# source# indexing# rows# cols# rows-start# rows-end# col-indx#]
        (export-cs ~(mkl-sparse t 'export_csc) source#
-                  indexing# rows# cols# rows-start# rows-end# col-indx# (~ptr nz#)))
+                  indexing# rows# cols# rows-start# rows-end# col-indx# nz#))
      (update-internal [nz# n# sparse-matrix#]
        (with-check sparse-error
          (. mkl_rt ~(mkl-sparse t 'update_values) (sparse-matrix sparse-matrix#) (int n#) nil nil nz#)

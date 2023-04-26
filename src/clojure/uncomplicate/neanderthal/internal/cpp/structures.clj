@@ -9,15 +9,14 @@
 (ns uncomplicate.neanderthal.internal.cpp.structures
   (:require
    [uncomplicate.commons
-    [core :refer [Releaseable release let-release Info info double-fn
-                  wrap-float wrap-double wrap-int wrap-long wrap-short wrap-byte
-                  Viewable view]]
+    [core :refer [Releaseable release let-release Info info double-fn wrap-float wrap-double
+                  wrap-int wrap-long wrap-short wrap-byte Viewable view]]
     [utils :refer [dragan-says-ex]]]
    [uncomplicate.fluokitten.protocols
     :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold foldmap fmap fmap!]]
-   [uncomplicate.clojure-cpp :refer [pointer pointer-seq fill! capacity! byte-buffer float-pointer
-                                     double-pointer long-pointer int-pointer short-pointer byte-pointer
-                                     element-count null?]]
+   [uncomplicate.clojure-cpp :refer [pointer fill! float-pointer double-pointer long-pointer
+                                     int-pointer short-pointer byte-pointer element-count null?
+                                     PointerCreator capacity!]]
    [uncomplicate.neanderthal
     [core :refer [transfer! copy! dim subvector vctr ge matrix-type mrows ncols]]
     [math :refer [ceil]]
@@ -42,6 +41,28 @@
             RealAccessor IntegerAccessor]))
 
 (declare real-block-vector integer-block-vector cs-vector integer-ge-matrix real-ge-matrix)
+
+;; TODO move to API
+(defprotocol SparseBlas
+  (gthr [this y x]))
+
+;; TODO Move to a more general namespace.
+
+(defprotocol CompressedSparse
+  (entries [this])
+  (indices [this]))
+
+(defprotocol CSR
+  (columns [this])
+  (indexb [this])
+  (indexe [this]))
+
+(defprotocol SparseFactory ;;TODO move to api.
+  (create-ge-csr [this m n ind ind-b ind-e column? init])
+  (create-tr-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
+  (create-sy-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
+  (cs-vector-engine [this])
+  (csr-engine [this]))
 
 ;; ================ Pointer data accessors  ====================================
 
@@ -79,6 +100,9 @@
      Destructor
      (destruct [_# p#]
        (destruct# p#))
+     PointerCreator
+     (pointer* [_#]
+       (~pointer nil))
      MemoryContext
      (compatible? [this# o#]
        (let [da# (data-accessor o#)]
@@ -100,6 +124,7 @@
 ;; =======================================================================
 
 ;; ================ from buffer-block ====================================
+
 (defn vector-seq
   ([^Vector vector ^long i]
    (lazy-seq
@@ -258,7 +283,7 @@
    (let [da (data-accessor fact)
          buf-ptr (pointer buf-ptr ofst)]
      (if (<= 0 n (.count da buf-ptr))
-       (constructor fact da (vector-engine fact) master (pointer buf-ptr ofst) n strd)
+       (constructor fact da (vector-engine fact) master buf-ptr n strd)
        (throw (ex-info "Insufficient buffer size." {:n n :offset ofst :buffer-size (.count da buf-ptr)})))))
   ([constructor fact master buf-ptr n strd]
    (block-vector constructor fact master buf-ptr n 0 strd))
@@ -290,7 +315,12 @@
        (index-factory (.-fact this#)))
      DataAccessorProvider
      (data-accessor [this#]
-       (.-da this#))))
+       (.-da this#))
+     CompressedSparse
+     (entries [this#]
+       this#)
+     (indices [this#]
+       nil)))
 
 ;; TODO extract general cpu/gpu parts to a more general macro
 (defmacro extend-block-vector [name block-vector ge-matrix]
@@ -661,27 +691,6 @@
 
 
 ;; ======================= Compressed Sparse Vector ======================================
-;; TODO move to API
-(defprotocol SparseBlas
-  (gthr [this y x]))
-
-;; TODO Move to a more general namespace.
-
-(defprotocol CompressedSparse
-  (entries [this])
-  (indices [this]))
-
-(defprotocol CSR
-  (columns [this])
-  (indexb [this])
-  (indexe [this]))
-
-(defprotocol SparseFactory ;;TODO move to api.
-  (create-ge-csr [this m n ind ind-b ind-e column? init])
-  (create-tr-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
-  (create-sy-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
-  (cs-vector-engine [this])
-  (csr-engine [this]))
 
 (deftype CSVector [fact eng ^Block nzx ^IntegerVector indx ^long n]
   Object
@@ -1257,7 +1266,10 @@
 
 (def real-ge-matrix (partial ge-matrix ->RealGEMatrix))
 
-;; TODO print-method
+(defmethod print-method RealGEMatrix [a ^java.io.Writer w]
+  (.write w (str a))
+  (when-not (null? (buffer a))
+    (print-ge w a)))
 
 (defmethod transfer! [clojure.lang.Sequential RealGEMatrix]
   [source ^RealGEMatrix destination]

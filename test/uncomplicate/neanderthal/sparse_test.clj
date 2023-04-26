@@ -230,8 +230,12 @@
          (view-ge (csv factory 10 [1 3 5] 1 2 3 4)) => (ge factory 3 1 [1 2 3])
          (csv factory 10 nil) => (csv factory 10)
          (dim (csv factory 0 [])) => 0
-         (csv factory 10 [1 3 5]) => (zero (csv factory 10 [1 3 5] [1 2 3]))
-         (csv factory 2 3 [[3] [0] [1] [0]]) => (throws ExceptionInfo)))
+         (csv factory 10 [1 3 5]) => (zero (csv factory 10 [1 3 5] [1 2 3]))))
+
+(defn test-csr-constructor [factory] ;; TODO
+  (facts "Create a compressed sparse matrix."
+
+         (csr factory 2 3 [[30] [0] [1] [0]]) => (throws ExceptionInfo)))
 
 (defn test-csr-mv [factory]
   (facts "BLAS 2 GE CSR mv!"
@@ -273,9 +277,7 @@
              (vctr factory (into [0 1 2 0 3] (repeat 25 0))) (vctr factory 0 0))
          => (vctr factory 44 56)))
 
-(test-csr-mv mkl-float)
-
-#_(defn test-csr-mm [factory]
+(defn test-csr-mm [factory]
   (facts "BLAS 3 GE CSR mm!"
          (mm! 2.0 (csr factory 3 2 [[0 1] [1 2] [0 1] [3 4] [0 1] [5 6]]) (ge factory 3 2 [1 2 3 4 5 6])
               3.0 (ge factory 3 2 [1 2 3 4 5 6])) => (throws ExceptionInfo)
@@ -287,11 +289,25 @@
          ;;   (identical? (mm! 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (ge factory 3 2 [1 2 3 4 5 6]) 3.0 c) c))
          ;; => true
 
-         ;; (mm! 2.0 (ge factory 2 3 [1 2 3 4 5 6]) (ge factory 3 2 [1 2 3 4 5 6])
-         ;;      3.0 (ge factory 2 2 [1 2 3 4])) => (ge factory 2 2 [47 62 107 140])
+         (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]]) (ge factory 3 2 [1 2 3 4 5 6])
+              3.0 (ge factory 2 2 [1 2 3 4])) => (ge factory 2 2 [47 62 107 140])
 
-         ;; (mm! 2.0 (ge factory 3 5 (take 15 (repeat 1))) (ge factory 5 3 (take 15 (repeat 1)))
-         ;;      3.0 (ge factory 3 3 (take 9 (repeat 0)))) => (ge factory 3 3 (take 9 (repeat 10)))
+         (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+              (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]])
+              0.0 (ge factory 2 2 [1 2 3 4])) => (ge factory 2 2 [44 56 98 128])
+
+         (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+              (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]])
+              3.0 (ge factory 2 2 [1 2 3 4])) => (throws ExceptionInfo)
+
+         ;; (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+         ;;      (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]]))
+         ;; => (csr factory 2 2 [[0 1] [44 98] [0 1] [56 128]])
+
+          (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+               (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]]))
+          => (csr factory 2 2 [[0 1] [44 98] [0 1] [56 128]])
+
 
          ;; (mm! 2.0 (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (ge factory 3 2 [1 4 2 5 3 6] {:layout :row})
          ;;      3.0  (ge factory 2 2 [1 2 3 4])) => (ge factory 2 2 [47 62 107 140])
@@ -323,6 +339,8 @@
          ;;   abcd-comp => abcd
          ))
 
+(test-csr-mm mkl-double)
+
 
 
 
@@ -341,6 +359,7 @@
 
 (defn test-core [factory]
   (test-csv-constructor factory)
+  (test-csr-constructor factory)
   (test-csr-mv factory)
   )
 
