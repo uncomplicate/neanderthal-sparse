@@ -58,7 +58,7 @@
   (indexe [this]))
 
 (defprotocol SparseFactory ;;TODO move to api.
-  (create-ge-csr [this m n ind ind-b ind-e column? init])
+  (create-ge-csr [this m n ind ind-b ind-e column? init] [this a b indices?])
   (create-tr-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
   (create-sy-csr [this m n ind ind-b ind-e column? lower? diag-unit? init])
   (cs-vector-engine [this])

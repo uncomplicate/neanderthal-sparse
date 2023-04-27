@@ -10,7 +10,7 @@
   (:require
    [uncomplicate.commons
     [core :refer [Releaseable release let-release with-release Info info Viewable view]]
-    [utils :refer [dragan-says-ex]]]
+    [utils :refer [dragan-says-ex with-check]]]
    [uncomplicate.fluokitten.protocols
     :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold]]
    [uncomplicate.clojure-cpp :refer [get-entry fill! int-pointer pointer null? capacity]]
@@ -24,9 +24,11 @@
     [printing :refer [print-vector]]]
    [uncomplicate.neanderthal.internal.host.fluokitten :refer :all]
    [uncomplicate.neanderthal.internal.cpp.structures
-    :refer [CompressedSparse entries indices vector-seq csr-engine CSR real-block-vector
-            integer-block-vector]]
-   [uncomplicate.neanderthal.internal.cpp.mkl.core :refer [create-csr matrix-descr export-csr]])
+    :refer [CompressedSparse entries indices vector-seq csr-engine CSR indexb indexe columns
+            real-block-vector integer-block-vector]]
+   [uncomplicate.neanderthal.internal.cpp.mkl
+    [constants :refer [mkl-sparse-request]]
+    [core :refer [create-csr matrix-descr export-csr sparse-error sparse-matrix]]])
   (:import [clojure.lang Seqable IFn IFn$DD IFn$DDD IFn$DDDD IFn$DDDDD IFn$LD IFn$LLD IFn$L IFn$LL
             IFn$LDD IFn$LLDD IFn$LLL IFn$LLLL]
            [org.bytedeco.javacpp IntPointer]
@@ -315,3 +317,35 @@
   [^RealBlockVector source ^CSMatrix destination]
   (gthr (engine destination) source destination)
   destination)
+
+(defn sparse-transpose ^long [a]
+  (if (.isColumnMajor (navigator a))
+    mkl_rt/SPARSE_OPERATION_TRANSPOSE
+    mkl_rt/SPARSE_OPERATION_NON_TRANSPOSE))
+
+(defn sparse-layout ^long [a]
+  (if (.isColumnMajor (navigator a))
+    mkl_rt/SPARSE_LAYOUT_COLUMN_MAJOR
+    mkl_rt/SPARSE_LAYOUT_ROW_MAJOR))
+
+(defn csr-ge-sp2m
+  ([^CSRMatrix a ^CSRMatrix b request]
+   (let-release [c (sparse-matrix)]
+     (with-check sparse-error
+       (mkl_rt/mkl_sparse_sp2m (sparse-transpose a) (descr a) (spmat a)
+                               (sparse-transpose b) (descr b) (spmat b)
+                               (get mkl-sparse-request request request)
+                               c)
+       (csr-matrix (factory a) c (layout-navigator true) (matrix-descr :ge)))))
+  ([^CSRMatrix a ^CSRMatrix b ^CSRMatrix c request]
+   (with-release [indexing (int-pointer 1)
+                  m (int-pointer 1)
+                  n (int-pointer 1)]
+     (with-check sparse-error
+       (mkl_rt/mkl_sparse_sp2m (sparse-transpose a) (descr a) (spmat a)
+                               (sparse-transpose b) (descr b) (spmat b)
+                               (get mkl-sparse-request request request)
+                               (spmat c))
+       (export-csr (buffer (entries c)) (spmat c) indexing m n
+                   (buffer (indexb c)) (buffer (indexe c)) (buffer (columns c))))
+     c)))

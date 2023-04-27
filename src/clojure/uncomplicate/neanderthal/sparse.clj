@@ -100,8 +100,10 @@
    (if (map? arg)
      (csr factory m n nil arg)
      (csr factory m n arg nil)))
-  ([factory m n]
-   (csr factory m n nil nil))
+  ([arg0 arg1 arg2]
+   (if (csr? arg0)
+     (create-ge-csr (api/factory arg0) arg0 arg1 (= true (:index arg2)))
+     (csr arg0 arg1 arg2 nil nil)))
   ([factory a]
    (let-release [res (transfer (api/factory factory) a)]
      (if (csr? res)

@@ -27,8 +27,9 @@
              [lapack :refer :all]
              [blas :refer [float-ptr double-ptr int-ptr vector-iopt vector-iaopt ge-map ge-reduce full-matching-map]]]
             [uncomplicate.neanderthal.internal.cpp.mkl
-             [core :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy create-csr sparse-error]]
-             [structures :refer [ge-csr-matrix spmat descr]]])
+             [constants :refer [mkl-sparse-request]]
+             [core :refer [malloc! free! mkl-sparse sparse-matrix mkl-sparse-copy sparse-error]]
+             [structures :refer [ge-csr-matrix spmat descr sparse-transpose sparse-layout csr-ge-sp2m]]])
   (:import java.nio.ByteBuffer
            [uncomplicate.neanderthal.internal.api DataAccessor Block Vector LayoutNavigator Region
             GEMatrix DenseStorage]
@@ -887,16 +888,6 @@
 
 ;; =================== Sparse Matrix engines ======================================
 
-(defn sparse-transpose ^long [a]
-  (if (.isColumnMajor (navigator a))
-    mkl_rt/SPARSE_OPERATION_TRANSPOSE
-    mkl_rt/SPARSE_OPERATION_NON_TRANSPOSE))
-
-(defn sparse-layout ^long [a]
-  (if (.isColumnMajor (navigator a))
-    mkl_rt/SPARSE_LAYOUT_COLUMN_MAJOR
-    mkl_rt/SPARSE_LAYOUT_ROW_MAJOR))
-
 (defmacro real-csr-blas* [name t ptr cast]
   `(extend-type ~name
      Blas
@@ -922,32 +913,41 @@
        a#)
      (mv
        ([_# alpha# a# x# beta# y#]
-        (. ~mkl_rt ~(mkl-sparse t 'mv) (sparse-transpose a#) (~cast alpha#) (spmat a#) (descr a#)
+        (. mkl_rt ~(mkl-sparse t 'mv) (sparse-transpose a#) (~cast alpha#) (spmat a#) (descr a#)
            (~ptr x#) (~cast beta#) (~ptr y#))
         y#)
        ([_# a# _#]
         (dragan-says-ex "In-place mv! is not supported for sparse matrices." {:a (info a#)})))
      (mm
+       ;; TODO ([this# alpha# a# b#]) instead of mm!
        ([this# alpha# a# b# _#]
         (let-release [c# (sparse-matrix)]
-          (when-not (= 1.0 (~cast alpha#) (scal this# alpha# a#)))
+          (when-not (f= 1.0 (~cast alpha#)) (scal this# alpha# a#))
           (with-check sparse-error ;;TODO perhaps use mkl_sparse_sp2m?!
-            (. ~mkl_rt mkl_sparse_spmm (sparse-transpose a#) (spmat a#) (spmat b#) c#)
+            (mkl_rt/mkl_sparse_spmm (sparse-transpose a#) (spmat a#) (spmat b#) c#)
             sparse-matrix)
           (ge-csr-matrix (factory a#) c# (.isColumnMajor (navigator a#))))) ;; todo nav descr
        ([this# alpha# a# b# beta# c# _#]
-        (if (instance? GEMatrix b#)
+        (cond
+          (instance? GEMatrix b#)
           (with-check sparse-error
-            (. ~mkl_rt ~(mkl-sparse t 'mm) (sparse-transpose a#) (~cast alpha#) (spmat a#) (descr a#)
+            (. mkl_rt ~(mkl-sparse t 'mm) (sparse-transpose a#) (~cast alpha#) (spmat a#) (descr a#)
                (sparse-layout b#) (~ptr b#) (ncols c#) (stride b#) (~cast beta#) (~ptr c#) (stride c#))
             c#)
+          (instance? GEMatrix c#)
           (do
-            (when-not (= 1.0 (~cast alpha#)) (scal this# alpha# a#))
-            (if (= 0.0 (~cast beta#))
+            (when-not (f= 1.0 (~cast alpha#)) (scal this# alpha# a#))
+            (if (f= 0.0 (~cast beta#))
               (with-check sparse-error
-                (. ~mkl_rt ~(mkl-sparse t 'spmmd) (sparse-transpose a#) (spmat a#) (spmat b#)
+                (. mkl_rt ~(mkl-sparse t 'spmmd) (sparse-transpose a#) (spmat a#) (spmat b#)
                    (sparse-layout c#) (~ptr c#) (stride c#))
                 c#)
+              (dragan-says-ex "Beta parameter not supported for sparse matrix multiplication." {:beta beta#})))
+          :default
+          (do
+            (when-not (f= 1.0 (~cast alpha#)) (scal this# alpha# a#))
+            (if (f= 0.0 (~cast beta#))
+              (csr-ge-sp2m a# b# c# :finalize)
               (dragan-says-ex "Beta parameter not supported for sparse matrix multiplication." {:beta beta#}))))))))
 
 (deftype DoubleCSREngine [])
@@ -999,6 +999,8 @@
   SparseFactory
   (create-ge-csr [this m n idx idx-b idx-e column? init]
     (ge-csr-matrix this m n idx idx-b (view idx-e) column? init))
+  (create-ge-csr [this a b indices?]
+    (csr-ge-sp2m a b (if indices? :full-no-val :count)))
   (cs-vector-engine [_]
     cs-vector-eng)
   (csr-engine [_]

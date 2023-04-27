@@ -12,7 +12,7 @@
             [uncomplicate.fluokitten.core :refer [fmap fmap! fold foldmap]]
             [uncomplicate.neanderthal.core :refer :all]
             [uncomplicate.neanderthal.sparse :refer [csv csr csv? csr?]]
-            [uncomplicate.neanderthal.internal.cpp.structures :refer [entries indices];;TODO
+            [uncomplicate.neanderthal.internal.cpp.structures :refer [entries indices columns indexb indexe];;TODO
              ]
             [uncomplicate.neanderthal.internal.cpp.mkl
              [factory :refer [mkl-float mkl-double mkl-int mkl-long mkl-short mkl-byte]]])
@@ -300,14 +300,22 @@
               (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]])
               3.0 (ge factory 2 2 [1 2 3 4])) => (throws ExceptionInfo)
 
-         ;; (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
-         ;;      (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]]))
-         ;; => (csr factory 2 2 [[0 1] [44 98] [0 1] [56 128]])
+         (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+              (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]]))
+         => (csr factory 2 2 [[0 1] [44 98] [0 1] [56 128]])
 
           (mm! 2.0 (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
                (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]]))
           => (csr factory 2 2 [[0 1] [44 98] [0 1] [56 128]])
 
+          (let [a (csr factory 2 3 [[0 1 2] [1 3 5] [0 1 2] [2 4 6]])
+                b (csr factory 3 2 [[0 1] [1 4] [0 1] [2 5] [0 1] [3 6]])
+                res (csr a b {:index true})]
+            (seq (columns res)) => [0 1 0 1]
+            (seq (indexb res)) => [0 2]
+            (seq (indexe res)) => [2 4]
+            (uncomplicate.neanderthal.internal.api/mm (.eng a) 2.0 a b 0.0 res nil) => res
+            (seq (entries res)) => [44.0 98.0 56.0 128.0])
 
          ;; (mm! 2.0 (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (ge factory 3 2 [1 4 2 5 3 6] {:layout :row})
          ;;      3.0  (ge factory 2 2 [1 2 3 4])) => (ge factory 2 2 [47 62 107 140])

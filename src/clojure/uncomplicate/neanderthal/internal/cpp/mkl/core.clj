@@ -79,87 +79,6 @@
 (defn mkl-sparse [type name]
   (symbol (format "mkl_sparse_%s_%s" type name)))
 
-(defn dec-sparse-status [^long status]
-  (case status
-    0 :success
-    1 :not-initialized
-    2 :alloc-failed
-    3 :invalid-value
-    4 :execution-failed
-    5 :internal-error
-    6 :not-supported
-    :unknown))
-
-(def ^:const mkl-sparse-operation
-  {:no-trans mkl_rt/SPARSE_OPERATION_NON_TRANSPOSE
-   111 mkl_rt/SPARSE_OPERATION_NON_TRANSPOSE
-   :trans mkl_rt/SPARSE_OPERATION_TRANSPOSE
-   112 mkl_rt/SPARSE_OPERATION_TRANSPOSE
-   :conj-trans mkl_rt/SPARSE_OPERATION_CONJUGATE_TRANSPOSE
-   113 mkl_rt/SPARSE_OPERATION_CONJUGATE_TRANSPOSE})
-
-(def ^:const mkl-sparse-matrix-type
-  {:ge mkl_rt/SPARSE_MATRIX_TYPE_GENERAL
-   :sy mkl_rt/SPARSE_MATRIX_TYPE_SYMMETRIC
-   :he mkl_rt/SPARSE_MATRIX_TYPE_HERMITIAN
-   :tr mkl_rt/SPARSE_MATRIX_TYPE_TRIANGULAR
-   :gd mkl_rt/SPARSE_MATRIX_TYPE_DIAGONAL
-   :btr mkl_rt/SPARSE_MATRIX_TYPE_BLOCK_TRIANGULAR
-   :bgd mkl_rt/SPARSE_MATRIX_TYPE_BLOCK_DIAGONAL})
-
-(def ^:const mkl-sparse-fill-mode
-  {:lower mkl_rt/SPARSE_FILL_MODE_LOWER
-   mkl_rt/SPARSE_FILL_MODE_LOWER mkl_rt/SPARSE_FILL_MODE_LOWER
-   122 mkl_rt/SPARSE_FILL_MODE_LOWER
-   :upper mkl_rt/SPARSE_FILL_MODE_UPPER
-   mkl_rt/SPARSE_FILL_MODE_UPPER mkl_rt/SPARSE_FILL_MODE_UPPER
-   121 mkl_rt/SPARSE_FILL_MODE_UPPER
-   :full mkl_rt/SPARSE_FILL_MODE_FULL
-   mkl_rt/SPARSE_FILL_MODE_FULL mkl_rt/SPARSE_FILL_MODE_FULL
-   :ge mkl_rt/SPARSE_FILL_MODE_FULL
-   mkl_rt/SPARSE_MATRIX_TYPE_GENERAL mkl_rt/SPARSE_FILL_MODE_FULL
-   :sy mkl_rt/SPARSE_FILL_MODE_LOWER
-   mkl_rt/SPARSE_MATRIX_TYPE_SYMMETRIC mkl_rt/SPARSE_FILL_MODE_LOWER
-   :he mkl_rt/SPARSE_FILL_MODE_LOWER
-   mkl_rt/SPARSE_MATRIX_TYPE_HERMITIAN mkl_rt/SPARSE_FILL_MODE_LOWER
-   :tr mkl_rt/SPARSE_FILL_MODE_LOWER
-   mkl_rt/SPARSE_MATRIX_TYPE_TRIANGULAR mkl_rt/SPARSE_FILL_MODE_LOWER
-   :gd mkl_rt/SPARSE_FILL_MODE_FULL
-   mkl_rt/SPARSE_MATRIX_TYPE_DIAGONAL mkl_rt/SPARSE_FILL_MODE_FULL
-   :btr mkl_rt/SPARSE_FILL_MODE_LOWER
-   mkl_rt/SPARSE_MATRIX_TYPE_BLOCK_TRIANGULAR mkl_rt/SPARSE_FILL_MODE_LOWER
-   :bgd mkl_rt/SPARSE_FILL_MODE_FULL
-   mkl_rt/SPARSE_MATRIX_TYPE_BLOCK_DIAGONAL mkl_rt/SPARSE_FILL_MODE_FULL})
-
-(def ^:const mkl-sparse-diag-mode
-  {:non-unit mkl_rt/SPARSE_DIAG_NON_UNIT
-   mkl_rt/SPARSE_DIAG_NON_UNIT mkl_rt/SPARSE_DIAG_NON_UNIT
-   131 mkl_rt/SPARSE_DIAG_NON_UNIT
-   :unit mkl_rt/SPARSE_DIAG_UNIT
-   mkl_rt/SPARSE_DIAG_UNIT mkl_rt/SPARSE_DIAG_UNIT
-   132 mkl_rt/SPARSE_DIAG_UNIT
-   :ge mkl_rt/SPARSE_DIAG_NON_UNIT
-   mkl_rt/SPARSE_MATRIX_TYPE_GENERAL mkl_rt/SPARSE_DIAG_NON_UNIT
-   :sy mkl_rt/SPARSE_DIAG_NON_UNIT
-   mkl_rt/SPARSE_MATRIX_TYPE_SYMMETRIC mkl_rt/SPARSE_DIAG_NON_UNIT
-   :he mkl_rt/SPARSE_DIAG_NON_UNIT
-   mkl_rt/SPARSE_MATRIX_TYPE_HERMITIAN mkl_rt/SPARSE_DIAG_NON_UNIT
-   :tr mkl_rt/SPARSE_DIAG_NON_UNIT
-   mkl_rt/SPARSE_MATRIX_TYPE_TRIANGULAR mkl_rt/SPARSE_DIAG_NON_UNIT
-   :gd mkl_rt/SPARSE_DIAG_NON_UNIT
-   mkl_rt/SPARSE_MATRIX_TYPE_DIAGONAL mkl_rt/SPARSE_DIAG_NON_UNIT
-   :btr mkl_rt/SPARSE_DIAG_NON_UNIT
-   mkl_rt/SPARSE_MATRIX_TYPE_BLOCK_TRIANGULAR mkl_rt/SPARSE_DIAG_NON_UNIT
-   :bgd mkl_rt/SPARSE_DIAG_NON_UNIT
-
-   mkl_rt/SPARSE_MATRIX_TYPE_BLOCK_DIAGONAL mkl_rt/SPARSE_DIAG_NON_UNIT})
-
-(def ^:const mkl-sparse-layout
-  {:row mkl_rt/SPARSE_LAYOUT_ROW_MAJOR
-   101 mkl_rt/SPARSE_LAYOUT_ROW_MAJOR
-   :column mkl_rt/SPARSE_LAYOUT_COLUMN_MAJOR
-   102 mkl_rt/SPARSE_LAYOUT_COLUMN_MAJOR})
-
 (defn sparse-error [^long err-code details]
   (let [err (dec-sparse-status err-code)]
     (ex-info (format "MKL sparse error: %s." (name err))
@@ -205,11 +124,11 @@
      (with-check sparse-error
        (. mkl_rt ~method (sparse-matrix ~source) indexing# rows# cols# start# end# indx# ~nz)
        (let [m# (long (get-entry rows# 0))
-             cnt# (get-entry end# (dec m#))]
+             nnz# (- (long (get-entry end# (dec m#))) (long (get-entry start# 0)))]
          (capacity! start# m#)
          (capacity! end# m#)
-         (capacity! indx# cnt#)
-         (capacity! ~nz cnt#)
+         (capacity! indx# nnz#)
+         (capacity! ~nz nnz#)
          ~source))))
 
 (defmacro extend-sparse-pointer [name t ptr]
@@ -393,3 +312,10 @@
    (doseq [hint hints]
      (hint a desc))
    (optimize! a)))
+
+(defn sp2m [transa descra a transb descrb b request c]
+  (with-check sparse-error
+    (mkl_rt/mkl_sparse_sp2m (int transa) ^mkl_rt$matrix_descr descra ^mkl_rt$sparse_matrix a
+                            (int transb) ^mkl_rt$matrix_descr descrb ^mkl_rt$sparse_matrix b
+                            (int (get mkl-sparse-request request request)) ^mkl_rt$sparse_matrix c)
+    c))
