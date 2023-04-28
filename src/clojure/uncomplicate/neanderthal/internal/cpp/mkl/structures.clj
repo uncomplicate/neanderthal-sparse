@@ -15,17 +15,18 @@
     :refer [PseudoFunctor Functor Foldable Magma Monoid Applicative fold]]
    [uncomplicate.clojure-cpp :refer [get-entry fill! int-pointer pointer null? capacity]]
    [uncomplicate.neanderthal
-    [core :refer [dim transfer! mrows ncols]]
+    [core :refer [dim transfer! mrows ncols subvector]]
     [block :refer [entry-type offset stride buffer column?]]
     [integer :refer [entry]]]
    [uncomplicate.neanderthal.internal
     [api :refer :all]
     [navigation :refer :all]
+    [common :refer [dense-rows dense-cols]]
     [printing :refer [print-vector]]]
    [uncomplicate.neanderthal.internal.host.fluokitten :refer :all]
    [uncomplicate.neanderthal.internal.cpp.structures
     :refer [CompressedSparse entries indices vector-seq csr-engine CSR indexb indexe columns
-            real-block-vector integer-block-vector]]
+            real-block-vector integer-block-vector cs-vector]]
    [uncomplicate.neanderthal.internal.cpp.mkl
     [constants :refer [mkl-sparse-request]]
     [core :refer [create-csr matrix-descr export-csr sparse-error sparse-matrix]]])
@@ -162,26 +163,42 @@
   (ncols [_]
     n)
   (row [a i]
-    #_(cs-vector false buf n (+ ofst (.index nav stor i 0)) ;;TODO only the compressed stripe available (row/col)
-                 (if (.isRowMajor nav) 1 (.ld stor))))
+    (if (.isRowMajor nav)
+      (let [j (entry pb i)
+            k (- (entry pe i) j)]
+        (cs-vector n (subvector indx j k) (subvector nzx j k)))
+      (dragan-says-ex "Sparse rows are available only in row-major CSR matrices." {:a (info a)})))
   (rows [a]
-    #_(sparse-rows a)) ;;TODO
+    (dense-rows a))
   (col [a j]
-    #_(cs-vector fact false buf m (+ ofst (.index nav stor 0 j)) ;;TODO
-                 (if (.isColumnMajor nav) 1 (.ld stor))))
+    (if (.isColumnMajor nav)
+      (let [i (entry pb j)
+            k (- (entry pe j) i)]
+        (cs-vector n (subvector indx i k) (subvector nzx i k)))
+      (dragan-says-ex "Sparse columns are available only in column-major CSR matrices." {:a (info a)})))
   (cols [a]
-    #_(sparse-cols a)) ;;TODO
+    (dense-cols a))
   (dia [a]
-    #_(dragan-says-ex "Diagonal of a sparse matrix is not available in a general case")) ;; TODO only if the matrix is diagonal.
+    (dragan-says-ex "Diagonals of a GE sparse matrix is not available."))
   (dia [a k]
-    #_(dragan-says-ex "Diagonal of a sparse matrix is not available in a general case")) ;; TODO only if the matrix is diagonal.
+    (dragan-says-ex "Diagonals of a GE sparse matrix is not available."))
   (dias [a]
-    #_(sparse-dias a)) ;;TODO
+    (dragan-says-ex "Diagonals of a GE sparse matrix is not available."))
   (submatrix [a i j k l]
-    #_(csr-matrix fact false buf k l (+ ofst (.index nav stor i j)) ;; TODO see if it's possible in general case
-                  nav (full-storage (.isColumnMajor nav) k l (.ld stor)) (ge-region k l)))
+    (let [i (long i)
+          j (long j)
+          k (long k)
+          l (long l)
+          [ok? b cnt] (if (.isRowMajor nav)
+                        [(and (= 0 j) (= n l)) i k]
+                        [(and (= 0 i) (= m k)) j l])
+          sub-pb (subvector pb b cnt)
+          sub-pe (subvector pe b cnt)
+          sub-b (entry sub-pb 0)
+          sub-cnt (- (entry sub-pe (dec (long cnt))) sub-b)]
+      (csr-matrix k l (subvector indx sub-b sub-cnt) sub-pb sub-pe (subvector nzx sub-b sub-cnt) nav desc)))
   (transpose [a]
-    #_(csr-matrix fact false buf n m ofst (flip nav) stor (flip reg))) ;; TODO
+    (csr-matrix n m (view indx) (view pb) (view pe) (view nzx) (flip nav) (flip desc)))
   CompressedSparse
   (entries [_]
     nzx)

@@ -12,8 +12,8 @@
             [uncomplicate.fluokitten.core :refer [fmap fmap! fold foldmap]]
             [uncomplicate.neanderthal.core :refer :all]
             [uncomplicate.neanderthal.sparse :refer [csv csr csv? csr?]]
-            [uncomplicate.neanderthal.internal.cpp.structures :refer [entries indices columns indexb indexe];;TODO
-             ]
+            [uncomplicate.neanderthal.internal.cpp.structures
+             :refer [entries indices columns indexb indexe]] ;;TODO
             [uncomplicate.neanderthal.internal.cpp.mkl
              [factory :refer [mkl-float mkl-double mkl-int mkl-long mkl-short mkl-byte]]])
   (:import  clojure.lang.ExceptionInfo))
@@ -27,10 +27,7 @@
                         xr0 (csv factory 0)
                         xr1 (csv factory 1)
                         a00 (csr factory 0 0)
-                        a11 (csr factory 1 1)
-                        ;; ar00 (ge factory 0 0)
-                        ;; ar11 (ge factory 1 1)
-                        ]
+                        a11 (csr factory 1 1)]
            (dim x0) => 0
            (seq (entries x0)) => []
            (seq (indices x0)) => []
@@ -78,18 +75,26 @@
   (let [x (csv factory 3 [1] [1.0])
         a (csr factory 2 3 [[1] [1.0]
                             [1] [2.0]])
-        ;;col-a (col a 0) ;; TODO
-        ]
+        b (csr factory 3 2 [[1] [1.0]
+                            [1] [2.0]]
+               {:layout :column})
+        row-a (row a 1)
+        col-b (col b 0)
+        sub-a (submatrix a 1 0 1 3)
+        sub-b (submatrix b 1 0 1 2)]
     (facts "CSVector and CSRMatrix release tests."
-           ;; (release col-a) => true
-           ;; (release col-a) => true
-           ;; (release sub-a) => true
-           ;; (release sub-a) => true
+           (release row-a) => true
+           (release row-a) => true
+           (release col-b) => true
+           (release col-b) => true
+           (release sub-a) => true
+           (release sub-a) => true
+           (release sub-b) => true
+           (release sub-b) => true
            (release x) => true
            (release x) => true
            (release a) => true
-           (release a) => true
-           )))
+           (release a) => true)))
 
 (defn test-csv-transfer [factory0 factory1]
   (with-release [x0 (csv factory0 4 [1 3])
@@ -214,8 +219,7 @@
 (defn test-csv-seq [factory]
   (facts "Compressed sparse vector as a sequence."
          (seq (csv factory 10 [1 3 5] [1 2 3])) => '(1.0 2.0 3.0)
-         ;; (seq (row (ge factory 2 3 (range 6)) 1)) => '(1.0 3.0 5.0) TODO
-         ))
+         (seq (row (csr factory 2 4 [[1 3] [10 20] [0 2] [100 200]]) 1)) => [100.0 200.0]))
 
 ;; =================== Neanderthal core  ============================
 
@@ -314,7 +318,7 @@
             (seq (columns res)) => [0 1 0 1]
             (seq (indexb res)) => [0 2]
             (seq (indexe res)) => [2 4]
-            (uncomplicate.neanderthal.internal.api/mm (.eng a) 2.0 a b 0.0 res nil) => res
+            (mm! 2.0 a b 0.0 res) => res
             (seq (entries res)) => [44.0 98.0 56.0 128.0])
 
          ;; (mm! 2.0 (ge factory 2 3 [1 3 5 2 4 6] {:layout :row}) (ge factory 3 2 [1 4 2 5 3 6] {:layout :row})
@@ -347,11 +351,6 @@
          ;;   abcd-comp => abcd
          ))
 
-(test-csr-mm mkl-double)
-
-
-
-
 (defn test-block [factory0 factory1]
   (test-create factory0)
   (test-equality factory0)
@@ -369,7 +368,7 @@
   (test-csv-constructor factory)
   (test-csr-constructor factory)
   (test-csr-mv factory)
-  )
+  (test-csr-mm factory))
 
 (defn test-all [factory0 factory1]
   (test-block factory0 factory1)

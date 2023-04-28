@@ -86,7 +86,7 @@
            (pointer-seq export-pe) => [1 2 3 5]
 
            (let [pe-address (address export-pe)]
-             (sp2m 10 descr a 10 descr b :finalize-mult-no-val c) => c
+             (sp2m 10 descr a 10 descr b :finalize-no-val c) => c
              (export-csr export-nz c export-indexing export-m export-n export-pb export-pe export-indx) => c
              (address export-pe) => pe-address)
            (pointer-seq export-indx) => [1 1 2 2 3]
@@ -94,7 +94,7 @@
 
            (let [pe-address (address export-pe)
                  indx-address (address export-indx)]
-             (sp2m 10 descr a 10 descr b :finalize-mult c) => c
+             (sp2m 10 descr a 10 descr b :finalize c) => c
              (export-csr export-nz c export-indexing export-m export-n export-pb export-pe export-indx) => c
              (address export-pe) => pe-address
              (address export-indx) => indx-address)

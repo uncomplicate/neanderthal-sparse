@@ -921,12 +921,13 @@
      (mm
        ;; TODO ([this# alpha# a# b#]) instead of mm!
        ([this# alpha# a# b# _#]
-        (let-release [c# (sparse-matrix)]
-          (when-not (f= 1.0 (~cast alpha#)) (scal this# alpha# a#))
-          (with-check sparse-error ;;TODO perhaps use mkl_sparse_sp2m?!
-            (mkl_rt/mkl_sparse_spmm (sparse-transpose a#) (spmat a#) (spmat b#) c#)
-            sparse-matrix)
-          (ge-csr-matrix (factory a#) c# (.isColumnMajor (navigator a#))))) ;; todo nav descr
+        (let-release [c# (sparse-matrix)
+                      res# (with-check sparse-error ;;TODO perhaps use mkl_sparse_sp2m?!
+                             (mkl_rt/mkl_sparse_spmm (sparse-transpose a#) (spmat a#) (spmat b#) c#)
+                             (ge-csr-matrix (factory a#) c# (.isColumnMajor (navigator a#))))]
+          (if (f= 1.0 (~cast alpha#))
+            res#
+            (scal this# alpha# res#))))
        ([this# alpha# a# b# beta# c# _#]
         (cond
           (instance? GEMatrix b#)
@@ -935,20 +936,22 @@
                (sparse-layout b#) (~ptr b#) (ncols c#) (stride b#) (~cast beta#) (~ptr c#) (stride c#))
             c#)
           (instance? GEMatrix c#)
-          (do
-            (when-not (f= 1.0 (~cast alpha#)) (scal this# alpha# a#))
-            (if (f= 0.0 (~cast beta#))
-              (with-check sparse-error
-                (. mkl_rt ~(mkl-sparse t 'spmmd) (sparse-transpose a#) (spmat a#) (spmat b#)
-                   (sparse-layout c#) (~ptr c#) (stride c#))
-                c#)
-              (dragan-says-ex "Beta parameter not supported for sparse matrix multiplication." {:beta beta#})))
+          (if (f= 0.0 (~cast beta#))
+            (with-check sparse-error
+              (. mkl_rt ~(mkl-sparse t 'spmmd) (sparse-transpose a#) (spmat a#) (spmat b#)
+                 (sparse-layout c#) (~ptr c#) (stride c#))
+              (if (f= 1.0 (~cast alpha#))
+                c#
+                (scal this# alpha# c#)))
+            (dragan-says-ex "Beta parameter not supported for sparse matrix multiplication." {:beta beta#}))
           :default
           (do
-            (when-not (f= 1.0 (~cast alpha#)) (scal this# alpha# a#))
             (if (f= 0.0 (~cast beta#))
               (csr-ge-sp2m a# b# c# :finalize)
-              (dragan-says-ex "Beta parameter not supported for sparse matrix multiplication." {:beta beta#}))))))))
+              (dragan-says-ex "Beta parameter not supported for sparse matrix multiplication." {:beta beta#}))
+            (if (f= 1.0 (~cast alpha#))
+              c#
+              (scal this# alpha# c#))))))))
 
 (deftype DoubleCSREngine [])
 (real-csr-blas* DoubleCSREngine "d" double-ptr double)
@@ -959,7 +962,6 @@
 (real-cs-blas-plus* FloatCSREngine "s" float-ptr float)
 
 ;; ================================================================================
-
 
 (deftype MKLRealFactory [index-fact ^DataAccessor da
                          vector-eng ge-eng cs-vector-eng csr-eng]

@@ -794,7 +794,6 @@
   VectorSpace
   (dim [_]
     n)
-  ;; TODO perhaps implement Vector?
   CompressedSparse
   (entries [_]
     nzx)
